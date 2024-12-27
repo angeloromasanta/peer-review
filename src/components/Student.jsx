@@ -13,10 +13,11 @@ import {
 } from 'firebase/firestore';
 
 function Student() {
+  // State declarations
   const [phase, setPhase] = useState('wait');
   const [currentActivity, setCurrentActivity] = useState(null);
-  const [studentName, setStudentName] = useState('');
-  const [studentEmail, setStudentEmail] = useState('');
+  const [studentName, setStudentName] = useState(() => localStorage.getItem('studentName') || '');
+  const [studentEmail, setStudentEmail] = useState(() => localStorage.getItem('studentEmail') || '');
   const [submission, setSubmission] = useState('');
   const [evaluationPair, setEvaluationPair] = useState(null);
   const [leftComments, setLeftComments] = useState('');
@@ -24,7 +25,17 @@ function Student() {
   const [submitted, setSubmitted] = useState(false);
   const [evaluationSubmitted, setEvaluationSubmitted] = useState(false);
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
-  const [studentId, setStudentId] = useState(null);
+  const [studentId, setStudentId] = useState(() => 
+    localStorage.getItem('studentId') ? Number(localStorage.getItem('studentId')) : null
+  );
+
+  // Persistence effect
+  useEffect(() => {
+    if (studentName) localStorage.setItem('studentName', studentName);
+    if (studentEmail) localStorage.setItem('studentEmail', studentEmail);
+    if (studentId) localStorage.setItem('studentId', studentId.toString());
+  }, [studentName, studentEmail, studentId]);
+
 
   // Listen to current activity
   useEffect(() => {
@@ -40,64 +51,96 @@ function Student() {
             id: snapshot.docs[0].id,
             ...snapshot.docs[0].data(),
           };
+          console.log('Activity updated:', activity);
           setCurrentActivity(activity);
           setPhase(activity.phase);
-          setEvaluationSubmitted(false);
+          
+          // Reset evaluation state when round changes
+          if (activity.currentRound !== currentActivity?.currentRound) {
+            console.log('Round changed from', currentActivity?.currentRound, 'to', activity.currentRound);
+            setEvaluationSubmitted(false);
+            setEvaluationPair(null);
+            setLeftComments('');
+            setRightComments('');
+          }
         }
       }
     );
-
+  
     return () => unsubscribe();
-  }, []);
+  }, [currentActivity?.currentRound]);
 
   // Handle submission
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!currentActivity) return;
-
-    await addDoc(collection(db, 'submissions'), {
-      activityId: currentActivity.id,
-      studentName,
-      studentEmail,
-      studentId: studentId,
-      content: submission,
-      timestamp: new Date(),
-    });
-
-    setSubmitted(true);
+  
+    try {
+      console.log('Handling submission with:', { studentName, studentEmail });
+      
+      // Get or create student ID
+      const id = await getAssignedStudentId(studentEmail);
+      setStudentId(id);
+      
+      await addDoc(collection(db, 'submissions'), {
+        activityId: currentActivity.id,
+        studentName,
+        studentEmail,
+        studentId: id,
+        content: submission,
+        timestamp: new Date(),
+      });
+  
+      setSubmitted(true);
+    } catch (error) {
+      console.error('Error submitting:', error);
+    }
   };
 
   // Function to get assigned student ID
   const getAssignedStudentId = async (email) => {
-    const studentQuery = query(
-      collection(db, 'students'),
-      where('email', '==', email)
-    );
-    const studentSnapshot = await getDocs(studentQuery);
-
-    if (!studentSnapshot.empty) {
-      // Student exists, return existing ID
-      const existingStudentData = studentSnapshot.docs[0].data();
-      return existingStudentData.studentId;
-    } else {
-      // Assign a new student ID
-      const allStudentsQuery = query(
+    console.log('Getting assigned student ID for:', email);
+    
+    try {
+      const studentQuery = query(
         collection(db, 'students'),
-        orderBy('studentId', 'desc')
+        where('email', '==', email)
       );
-      const allStudentsSnapshot = await getDocs(allStudentsQuery);
-      const lastStudentId = allStudentsSnapshot.empty
-        ? 0
-        : allStudentsSnapshot.docs[0].data().studentId;
-      const newStudentId = lastStudentId + 1;
-
-      // Add the new student to the collection
-      await addDoc(collection(db, 'students'), {
-        email: email,
-        studentId: newStudentId,
-      });
-
-      return newStudentId;
+      const studentSnapshot = await getDocs(studentQuery);
+  
+      if (!studentSnapshot.empty) {
+        // Student exists, return existing ID
+        const existingStudentData = studentSnapshot.docs[0].data();
+        console.log('Found existing student ID:', existingStudentData.studentId);
+        setStudentId(existingStudentData.studentId);
+        return existingStudentData.studentId;
+      } else {
+        // Assign a new student ID
+        const allStudentsQuery = query(
+          collection(db, 'students'),
+          orderBy('studentId', 'desc'),
+          limit(1)
+        );
+        const allStudentsSnapshot = await getDocs(allStudentsQuery);
+        const lastStudentId = allStudentsSnapshot.empty
+          ? 0
+          : allStudentsSnapshot.docs[0].data().studentId;
+        const newStudentId = lastStudentId + 1;
+  
+        console.log('Creating new student ID:', newStudentId);
+  
+        // Add the new student to the collection
+        await addDoc(collection(db, 'students'), {
+          email: email,
+          studentId: newStudentId,
+        });
+  
+        setStudentId(newStudentId);
+        return newStudentId;
+      }
+    } catch (error) {
+      console.error('Error getting assigned student ID:', error);
+      throw error;
     }
   };
 
@@ -116,134 +159,128 @@ function Student() {
   // Get pair for evaluation (updated for new algorithm)
   useEffect(() => {
     const getEvaluationPair = async () => {
-      if (
-        !currentActivity ||
-        phase !== 'evaluate' ||
-        !studentEmail ||
-        !studentId
-      )
+      if (!currentActivity || phase !== 'evaluate' || !studentEmail || !studentId) {
+        console.log('Missing required data:', {
+          hasActivity: !!currentActivity,
+          phase,
+          hasEmail: !!studentEmail,
+          hasId: !!studentId
+        });
         return;
-
+      }
+  
       const currentRound = currentActivity.currentRound;
-
-      // Fetch evaluations to check for previous evaluations by this student
-      const evaluationsSnapshot = await getDocs(
-        query(
-          collection(db, 'evaluations'),
-          where('activityId', '==', currentActivity.id),
-          where('evaluatorEmail', '==', studentEmail)
-        )
-      );
-
-      const evaluatedSubmissions = new Set();
-      evaluationsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        evaluatedSubmissions.add(data.leftSubmissionId);
-        evaluatedSubmissions.add(data.rightSubmissionId);
-      });
-
-      // Fetch submissions and sort based on the algorithm
-      const submissionsSnapshot = await getDocs(
-        query(
-          collection(db, 'submissions'),
-          where('activityId', '==', currentActivity.id)
-          //where('studentEmail', '!=', studentEmail) // Exclude own submission // Removed so student can evaluate any paper that is not theirs in the future
-        )
-      );
-
-      const submissions = submissionsSnapshot.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() }))
-        .filter((submission) => submission.studentEmail !== studentEmail); // Filter out the student's own submission
-
-      // Algorithm to sort submissions for the current round
-      if (currentRound === 1) {
-        // Round 1: Pair based on student ID
-        submissions.sort((a, b) => a.studentId - b.studentId);
-      } else {
-        // Subsequent rounds: Sort based on scores, then randomize ties
-        const evaluations = await getDocs(
+      console.log('Getting evaluation pair for round:', currentRound);
+  
+      try {
+        // Fetch evaluations for the current round only
+        const evaluationsSnapshot = await getDocs(
           query(
             collection(db, 'evaluations'),
+            where('activityId', '==', currentActivity.id),
+            where('evaluatorEmail', '==', studentEmail),
+            where('round', '==', currentRound) // Add round filter
+          )
+        );
+  
+        console.log(`Found ${evaluationsSnapshot.docs.length} evaluations by this student for round ${currentRound}`);
+  
+        // Reset evaluation submitted state if student hasn't evaluated in this round
+        if (evaluationsSnapshot.empty) {
+          console.log('No evaluations found for current round, resetting evaluation state');
+          setEvaluationSubmitted(false);
+        }
+  
+        if (evaluationSubmitted) {
+          console.log('Student has already submitted evaluation for this round');
+          return;
+        }
+  
+        const evaluatedSubmissions = new Set();
+        evaluationsSnapshot.forEach((doc) => {
+          const data = doc.data();
+          evaluatedSubmissions.add(data.leftSubmissionId);
+          evaluatedSubmissions.add(data.rightSubmissionId);
+        });
+  
+        // Fetch all submissions for the activity
+        const submissionsSnapshot = await getDocs(
+          query(
+            collection(db, 'submissions'),
             where('activityId', '==', currentActivity.id)
           )
         );
-        const scores = {};
-        evaluations.forEach((doc) => {
-          const evaluation = doc.data();
-          scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
-        });
-
-        submissions.sort((a, b) => {
-          const scoreA = scores[a.id] || 0;
-          const scoreB = scores[b.id] || 0;
-          if (scoreA !== scoreB) {
-            return scoreB - scoreA; // Sort by score descending
-          }
-          return Math.random() - 0.5; // Randomize if scores are equal
-        });
-      }
-
-      // Find a suitable pair for the student based on studentId
-      if (currentRound === 1) {
-        // Round 1 pairing logic
-        let leftIndex = (studentId - 1) % submissions.length;
-        let rightIndex = studentId % submissions.length;
-
-        if (leftIndex === rightIndex) {
-          rightIndex = (rightIndex + 1) % submissions.length;
+  
+        const submissions = submissionsSnapshot.docs
+          .map((doc) => ({ id: doc.id, ...doc.data() }))
+          .filter((submission) => submission.studentEmail !== studentEmail);
+  
+        console.log(`Found ${submissions.length} total submissions (excluding own)`);
+  
+        if (submissions.length < 2) {
+          console.log('Not enough submissions to create a pair');
+          return;
         }
-
-        setEvaluationPair({
-          left: submissions[leftIndex],
-          right: submissions[rightIndex],
-        });
-      } else {
-        // Subsequent rounds pairing logic
-        for (let i = 0; i < submissions.length; i++) {
-          for (let j = i + 1; j < submissions.length; j++) {
-            const pair = [submissions[i], submissions[j]];
-            const pairIds = pair.map((submission) => submission.id).sort();
-
-            // Check if this pair has been evaluated before
-            const hasEvaluatedPair = evaluationsSnapshot.docs.some((doc) => {
-              const evalData = doc.data();
-              const evaluatedPair = [
-                evalData.leftSubmissionId,
-                evalData.rightSubmissionId,
-              ].sort();
-              return (
-                JSON.stringify(evaluatedPair) === JSON.stringify(pairIds) &&
-                evalData.round === currentRound
-              );
-            });
-
-            const hasEvaluatedSubmissions = pair.some((submission) =>
-              evaluatedSubmissions.has(submission.id)
-            );
-
-            if (!hasEvaluatedPair && !hasEvaluatedSubmissions) {
+  
+        // Sort submissions based on the round
+        if (currentRound === 1) {
+          submissions.sort((a, b) => a.studentId - b.studentId);
+          console.log('Round 1: Sorted by student ID');
+        } else {
+          // Get all evaluations for ranking
+          const allEvaluations = await getDocs(
+            query(
+              collection(db, 'evaluations'),
+              where('activityId', '==', currentActivity.id)
+            )
+          );
+  
+          const scores = {};
+          allEvaluations.forEach((doc) => {
+            const evaluation = doc.data();
+            scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
+          });
+  
+          submissions.sort((a, b) => {
+            const scoreA = scores[a.id] || 0;
+            const scoreB = scores[b.id] || 0;
+            if (scoreA !== scoreB) return scoreB - scoreA;
+            return Math.random() - 0.5;
+          });
+          console.log('Later round: Sorted by scores and randomized ties');
+        }
+  
+        // Find a suitable pair that hasn't been evaluated
+        let pairFound = false;
+        for (let i = 0; i < submissions.length - 1 && !pairFound; i++) {
+          for (let j = i + 1; j < submissions.length && !pairFound; j++) {
+            if (!evaluatedSubmissions.has(submissions[i].id) && 
+                !evaluatedSubmissions.has(submissions[j].id)) {
+              console.log('Found new pair for evaluation');
               setEvaluationPair({
-                left: pair[0],
-                right: pair[1],
+                left: submissions[i],
+                right: submissions[j]
               });
-              return; // Found a pair, exit the loop
+              pairFound = true;
             }
           }
         }
+  
+        if (!pairFound) {
+          console.log('No suitable pairs found for evaluation');
+        }
+  
+      } catch (error) {
+        console.error('Error getting evaluation pair:', error);
       }
     };
+  
+    getEvaluationPair();
+  }, [currentActivity?.currentRound, phase, studentEmail, studentId, evaluationSubmitted]);
+  
 
-    if (
-      currentActivity &&
-      phase === 'evaluate' &&
-      studentEmail &&
-      studentId &&
-      !evaluationSubmitted
-    ) {
-      getEvaluationPair();
-    }
-  }, [currentActivity, phase, studentEmail, studentId, evaluationSubmitted]);
 
+  
   // Submit evaluation
   const submitEvaluation = async (winner) => {
     if (!currentActivity || !evaluationPair) return;
@@ -362,13 +399,21 @@ function Student() {
   }
 
   if (phase === 'evaluate') {
+    if (!studentEmail || !studentId) {
+      return (
+        <div className="p-8">
+          <h1 className="text-2xl text-red-600">Session expired</h1>
+          <p>Please refresh the page to start over.</p>
+        </div>
+      );
+    }
+
     if (evaluationSubmitted) {
       return (
         <div className="p-8">
-          <h1 className="text-2xl">
-            Your evaluation for this round has been submitted.
-          </h1>
+          <h1 className="text-2xl">Your evaluation for this round has been submitted.</h1>
           <p>Please wait for the next round or final results.</p>
+          <p className="mt-4 text-gray-600">Logged in as: {studentName} ({studentEmail})</p>
         </div>
       );
     }
@@ -381,7 +426,7 @@ function Student() {
             {/* Left Submission */}
             <div className="border p-4">
               <div className="h-48 overflow-y-auto mb-4">
-                <p>{evaluationPair?.left.content}</p>
+                <p>{evaluationPair.left.content}</p>
               </div>
               <textarea
                 value={leftComments}
@@ -400,7 +445,7 @@ function Student() {
             {/* Right Submission */}
             <div className="border p-4">
               <div className="h-48 overflow-y-auto mb-4">
-                <p>{evaluationPair?.right.content}</p>
+                <p>{evaluationPair.right.content}</p>
               </div>
               <textarea
                 value={rightComments}
@@ -418,15 +463,13 @@ function Student() {
           </div>
         </div>
       );
-    } else {
-      // No evaluation pair yet, show a waiting message
-      return (
-        <div className="p-8">
-          <h1 className="text-2xl">Waiting for evaluation pair...</h1>
-          {/* You can add a loading spinner or other indicator here */}
-        </div>
-      );
     }
+
+    return (
+      <div className="p-8">
+        <h1 className="text-2xl">Waiting for evaluation pair...</h1>
+      </div>
+    );
   }
 
   if (phase === 'final') {

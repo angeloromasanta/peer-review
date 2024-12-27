@@ -11,6 +11,7 @@ import {
   where,
   getDocs,
   deleteDoc,
+  getDoc
 } from 'firebase/firestore';
 
 function Admin() {
@@ -24,12 +25,16 @@ function Admin() {
 
   useEffect(() => {
     if (!currentActivity) return;
-
+  
     const unsubscribe = onSnapshot(
       doc(db, 'activities', currentActivity.id),
-      (doc) => setPhase(doc.data().phase)
+      (doc) => {
+        const data = doc.data();
+        setPhase(data.phase);
+        console.log('Activity updated:', data); // Debug log
+      }
     );
-
+  
     return () => unsubscribe();
   }, [currentActivity]);
 
@@ -131,25 +136,54 @@ function Admin() {
     setPhase('evaluate');
   };
 
-  const startNextRound = async () => {
-    if (!currentActivity) return;
+  
+const startNextRound = async () => {
+  if (!currentActivity) {
+    console.error('No current activity found');
+    return;
+  }
 
-    const newRound = currentActivity.currentRound + 1; // Calculate the new round number
+  try {
+    console.log('Starting next round...');
+    
+    // Get the current activity data
+    const activityDoc = await getDoc(doc(db, 'activities', currentActivity.id));
+    
+    if (!activityDoc.exists()) {
+      console.error('Activity document not found');
+      return;
+    }
 
+    const activityData = activityDoc.data();
+    console.log('Current activity data:', activityData);
+    
+    const currentRound = activityData.currentRound || 1;
+    console.log('Current round:', currentRound);
+    
+    // Update the activity with new round number
     await updateDoc(doc(db, 'activities', currentActivity.id), {
-      currentRound: newRound, // Update with the new round number
-      phase: 'evaluate',
+      currentRound: currentRound + 1,
+      phase: 'evaluate'  // Ensure we stay in evaluate phase
     });
+    
+    console.log('Successfully updated to round:', currentRound + 1);
+    
+    // Reset evaluation states for students
+    const evaluationsRef = collection(db, 'evaluations');
+    const roundEvaluationsQuery = query(
+      evaluationsRef,
+      where('activityId', '==', currentActivity.id),
+      where('round', '==', currentRound)
+    );
+    
+    // Log the number of evaluations for the current round
+    const evaluationsSnapshot = await getDocs(roundEvaluationsQuery);
+    console.log(`Found ${evaluationsSnapshot.docs.length} evaluations for round ${currentRound}`);
 
-    // Update the local state to reflect the changes
-    setCurrentActivity((prevActivity) => ({
-      ...prevActivity,
-      currentRound: newRound, // Update the local state's round number
-      phase: 'evaluate',
-    }));
-
-    setPhase('evaluate'); // Also update the phase state variable
-  };
+  } catch (error) {
+    console.error('Error starting next round:', error);
+  }
+};
 
   const endEvaluation = async () => {
     if (!currentActivity) return;

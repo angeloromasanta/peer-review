@@ -7,10 +7,13 @@ import {
   query,
   where,
   getDocs,
+  getDoc,  // Add this import
+  doc,     // Add this import
   onSnapshot,
   limit,
   orderBy,
 } from 'firebase/firestore';
+import { runEvaluationRound } from './evaluationManager';
 
 function Student() {
   // State declarations
@@ -157,128 +160,74 @@ function Student() {
   }, [studentEmail]);
 
   // Get pair for evaluation (updated for new algorithm)
-  useEffect(() => {
-    const getEvaluationPair = async () => {
-      if (!currentActivity || phase !== 'evaluate' || !studentEmail || !studentId) {
-        console.log('Missing required data:', {
-          hasActivity: !!currentActivity,
-          phase,
-          hasEmail: !!studentEmail,
-          hasId: !!studentId
-        });
+  // Update the evaluation pair fetching useEffect in Student.jsx
+useEffect(() => {
+  const getEvaluationPair = async () => {
+    if (!currentActivity || phase !== 'evaluate' || !studentEmail) {
+      console.log('Missing required data:', {
+        hasActivity: !!currentActivity,
+        phase,
+        hasEmail: !!studentEmail,
+      });
+      return;
+    }
+
+    const currentRound = currentActivity.currentRound;
+    console.log('Getting evaluation pair for round:', currentRound);
+
+    try {
+      // First check if student has already evaluated in this round
+      const evaluationsSnapshot = await getDocs(
+        query(
+          collection(db, 'evaluations'),
+          where('activityId', '==', currentActivity.id),
+          where('evaluatorEmail', '==', studentEmail),
+          where('round', '==', currentRound)
+        )
+      );
+
+      console.log(`Found ${evaluationsSnapshot.docs.length} evaluations by this student for round ${currentRound}`);
+
+      if (!evaluationsSnapshot.empty) {
+        console.log('Student has already evaluated in this round');
+        setEvaluationSubmitted(true);
         return;
       }
-  
-      const currentRound = currentActivity.currentRound;
-      console.log('Getting evaluation pair for round:', currentRound);
-  
-      try {
-        // Fetch evaluations for the current round only
-        const evaluationsSnapshot = await getDocs(
-          query(
-            collection(db, 'evaluations'),
-            where('activityId', '==', currentActivity.id),
-            where('evaluatorEmail', '==', studentEmail),
-            where('round', '==', currentRound) // Add round filter
-          )
-        );
-  
-        console.log(`Found ${evaluationsSnapshot.docs.length} evaluations by this student for round ${currentRound}`);
-  
-        // Reset evaluation submitted state if student hasn't evaluated in this round
-        if (evaluationsSnapshot.empty) {
-          console.log('No evaluations found for current round, resetting evaluation state');
-          setEvaluationSubmitted(false);
-        }
-  
-        if (evaluationSubmitted) {
-          console.log('Student has already submitted evaluation for this round');
-          return;
-        }
-  
-        const evaluatedSubmissions = new Set();
-        evaluationsSnapshot.forEach((doc) => {
-          const data = doc.data();
-          evaluatedSubmissions.add(data.leftSubmissionId);
-          evaluatedSubmissions.add(data.rightSubmissionId);
-        });
-  
-        // Fetch all submissions for the activity
-        const submissionsSnapshot = await getDocs(
-          query(
-            collection(db, 'submissions'),
-            where('activityId', '==', currentActivity.id)
-          )
-        );
-  
-        const submissions = submissionsSnapshot.docs
-          .map((doc) => ({ id: doc.id, ...doc.data() }))
-          .filter((submission) => submission.studentEmail !== studentEmail);
-  
-        console.log(`Found ${submissions.length} total submissions (excluding own)`);
-  
-        if (submissions.length < 2) {
-          console.log('Not enough submissions to create a pair');
-          return;
-        }
-  
-        // Sort submissions based on the round
-        if (currentRound === 1) {
-          submissions.sort((a, b) => a.studentId - b.studentId);
-          console.log('Round 1: Sorted by student ID');
-        } else {
-          // Get all evaluations for ranking
-          const allEvaluations = await getDocs(
-            query(
-              collection(db, 'evaluations'),
-              where('activityId', '==', currentActivity.id)
-            )
-          );
-  
-          const scores = {};
-          allEvaluations.forEach((doc) => {
-            const evaluation = doc.data();
-            scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
-          });
-  
-          submissions.sort((a, b) => {
-            const scoreA = scores[a.id] || 0;
-            const scoreB = scores[b.id] || 0;
-            if (scoreA !== scoreB) return scoreB - scoreA;
-            return Math.random() - 0.5;
-          });
-          console.log('Later round: Sorted by scores and randomized ties');
-        }
-  
-        // Find a suitable pair that hasn't been evaluated
-        let pairFound = false;
-        for (let i = 0; i < submissions.length - 1 && !pairFound; i++) {
-          for (let j = i + 1; j < submissions.length && !pairFound; j++) {
-            if (!evaluatedSubmissions.has(submissions[i].id) && 
-                !evaluatedSubmissions.has(submissions[j].id)) {
-              console.log('Found new pair for evaluation');
-              setEvaluationPair({
-                left: submissions[i],
-                right: submissions[j]
-              });
-              pairFound = true;
-            }
-          }
-        }
-  
-        if (!pairFound) {
-          console.log('No suitable pairs found for evaluation');
-        }
-  
-      } catch (error) {
-        console.error('Error getting evaluation pair:', error);
-      }
-    };
-  
-    getEvaluationPair();
-  }, [currentActivity?.currentRound, phase, studentEmail, studentId, evaluationSubmitted]);
-  
 
+      // Get assigned pair from activity document
+      const activityDoc = await getDoc(doc(db, 'activities', currentActivity.id));
+      const assignments = activityDoc.data()?.evaluatorAssignments || {};
+      const assignedPair = assignments[studentEmail];
+
+      if (!assignedPair) {
+        console.log('No evaluation pair assigned to this student');
+        return;
+      }
+
+      console.log('Found assigned pair:', assignedPair);
+
+      // Fetch the submissions for the assigned pair
+      const [leftId, rightId] = assignedPair;
+      const leftSubmission = await getDoc(doc(db, 'submissions', leftId));
+      const rightSubmission = await getDoc(doc(db, 'submissions', rightId));
+
+      if (!leftSubmission.exists() || !rightSubmission.exists()) {
+        console.error('One or both submissions not found');
+        return;
+      }
+
+      setEvaluationPair({
+        left: { id: leftId, ...leftSubmission.data() },
+        right: { id: rightId, ...rightSubmission.data() }
+      });
+
+    } catch (error) {
+      console.error('Error getting evaluation pair:', error);
+    }
+  };
+
+  getEvaluationPair();
+}, [currentActivity?.currentRound, phase, studentEmail, evaluationSubmitted]);
 
   
   // Submit evaluation

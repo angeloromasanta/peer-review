@@ -13,6 +13,8 @@ import {
   deleteDoc,
   getDoc
 } from 'firebase/firestore';
+import { runEvaluationRound } from './evaluationManager';
+
 
 function Admin() {
   const [phase, setPhase] = useState('init');
@@ -128,15 +130,20 @@ function Admin() {
 
   const startEvaluation = async () => {
     if (!currentActivity) return;
-
+  
+    const evaluators = await runEvaluationRound(currentActivity.id);
+    console.log('Evaluators assigned:', evaluators);
+  
     await updateDoc(doc(db, 'activities', currentActivity.id), {
       phase: 'evaluate',
       currentRound: 1,
     });
     setPhase('evaluate');
   };
+  
 
   
+// Update startNextRound in Admin.jsx
 const startNextRound = async () => {
   if (!currentActivity) {
     console.error('No current activity found');
@@ -160,25 +167,18 @@ const startNextRound = async () => {
     const currentRound = activityData.currentRound || 1;
     console.log('Current round:', currentRound);
     
+    // Run evaluation round and get new assignments
+    const evaluators = await runEvaluationRound(currentActivity.id);
+    console.log('New evaluation assignments:', evaluators);
+    
     // Update the activity with new round number
     await updateDoc(doc(db, 'activities', currentActivity.id), {
       currentRound: currentRound + 1,
-      phase: 'evaluate'  // Ensure we stay in evaluate phase
+      phase: 'evaluate',
+      evaluatorAssignments: evaluators  // Store assignments in activity
     });
     
     console.log('Successfully updated to round:', currentRound + 1);
-    
-    // Reset evaluation states for students
-    const evaluationsRef = collection(db, 'evaluations');
-    const roundEvaluationsQuery = query(
-      evaluationsRef,
-      where('activityId', '==', currentActivity.id),
-      where('round', '==', currentRound)
-    );
-    
-    // Log the number of evaluations for the current round
-    const evaluationsSnapshot = await getDocs(roundEvaluationsQuery);
-    console.log(`Found ${evaluationsSnapshot.docs.length} evaluations for round ${currentRound}`);
 
   } catch (error) {
     console.error('Error starting next round:', error);

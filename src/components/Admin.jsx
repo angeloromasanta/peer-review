@@ -11,9 +11,14 @@ import {
   where,
   getDocs,
   deleteDoc,
-  getDoc
+  getDoc,
+  orderBy,  // Add this
+  limit     // Add this
 } from 'firebase/firestore';
-import { runEvaluationRound } from './evaluationManager';
+import {
+  runEvaluationRound,
+  resetEvaluationManager
+} from './evaluationManager';
 
 
 function Admin() {
@@ -25,20 +30,70 @@ function Admin() {
   const [rankings, setRankings] = useState([]);
   const [isResetting, setIsResetting] = useState(false);
 
-  useEffect(() => {
-    if (!currentActivity) return;
+  // In Admin.jsx, add initial activity fetch
+// Add this at the beginning right after the state declarations
+useEffect(() => {
+  const fetchCurrentActivity = async () => {
+    try {
+      // Query the most recent activity
+      const activitiesQuery = query(
+        collection(db, 'activities'),
+        orderBy('currentRound', 'desc'),
+        limit(1)
+      );
+      
+      const activitiesSnapshot = await getDocs(activitiesQuery);
+      
+      if (!activitiesSnapshot.empty) {
+        const activity = {
+          id: activitiesSnapshot.docs[0].id,
+          ...activitiesSnapshot.docs[0].data()
+        };
+        console.log('Found existing activity:', activity);
+        setCurrentActivity(activity);
+        setPhase(activity.phase);
+        setActivityName(activity.name);
+      } else {
+        console.log('No existing activity found, starting fresh');
+        setPhase('init');
+      }
+    } catch (error) {
+      console.error('Error fetching current activity:', error);
+      setPhase('init');
+    }
+  };
+
+  fetchCurrentActivity();
+}, []); // Empty dependency array means this runs once on mount
+
+// Then update the existing activity listener useEffect to handle both creation and updates
+useEffect(() => {
+  if (!currentActivity) return;
+
+  console.log('Setting up activity listener for:', currentActivity.id);
   
-    const unsubscribe = onSnapshot(
-      doc(db, 'activities', currentActivity.id),
-      (doc) => {
+  const unsubscribe = onSnapshot(
+    doc(db, 'activities', currentActivity.id),
+    (doc) => {
+      if (doc.exists()) {
         const data = doc.data();
         setPhase(data.phase);
-        console.log('Activity updated:', data); // Debug log
+        console.log('Activity updated:', data);
+      } else {
+        // Activity was deleted
+        console.log('Activity no longer exists');
+        setPhase('init');
+        setCurrentActivity(null);
+        setActivityName('');
       }
-    );
-  
-    return () => unsubscribe();
-  }, [currentActivity]);
+    },
+    (error) => {
+      console.error('Error listening to activity:', error);
+    }
+  );
+
+  return () => unsubscribe();
+}, [currentActivity?.id]); // Only re-run if activity ID changes
 
   useEffect(() => {
     if (!currentActivity) return;
@@ -81,35 +136,49 @@ function Admin() {
 
   const resetApplication = async () => {
     if (isResetting) return;
-
+  
     try {
       setIsResetting(true);
-
+  
+      // Delete all students
+      const studentsSnapshot = await getDocs(collection(db, 'students'));
+      for (const doc of studentsSnapshot.docs) {
+        await deleteDoc(doc.ref);
+      }
+  
       // Delete all submissions
       const submissionsSnapshot = await getDocs(collection(db, 'submissions'));
       for (const doc of submissionsSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-
+  
       // Delete all evaluations
       const evaluationsSnapshot = await getDocs(collection(db, 'evaluations'));
       for (const doc of evaluationsSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-
+  
       // Delete all activities
       const activitiesSnapshot = await getDocs(collection(db, 'activities'));
       for (const doc of activitiesSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-
-      // Reset local state
+  
+      // Reset evaluation manager
+      resetEvaluationManager();
+  
+      // Reset all local state
       setPhase('init');
       setActivityName('');
       setCurrentActivity(null);
       setSubmissions([]);
       setEvaluations([]);
       setRankings([]);
+  
+      // Clear localStorage
+      localStorage.clear();
+  
+      console.log('Application reset complete');
     } catch (error) {
       console.error('Error resetting application:', error);
     } finally {
@@ -313,8 +382,7 @@ const startNextRound = async () => {
   }
 
   if (phase === 'evaluate') {
-    const totalPossibleEvaluations =
-      (submissions.length * (submissions.length - 1)) / 2;
+    const totalPossibleEvaluations = submissions.length ;
 
     return (
       <div className="container mx-auto p-8">

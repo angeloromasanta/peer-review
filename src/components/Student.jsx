@@ -41,37 +41,59 @@ function Student() {
 
 
   // Listen to current activity
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
-      query(
-        collection(db, 'activities'),
-        orderBy('currentRound', 'desc'),
-        limit(1)
-      ),
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const activity = {
-            id: snapshot.docs[0].id,
-            ...snapshot.docs[0].data(),
-          };
-          console.log('Activity updated:', activity);
-          setCurrentActivity(activity);
-          setPhase(activity.phase);
-          
-          // Reset evaluation state when round changes
-          if (activity.currentRound !== currentActivity?.currentRound) {
-            console.log('Round changed from', currentActivity?.currentRound, 'to', activity.currentRound);
-            setEvaluationSubmitted(false);
-            setEvaluationPair(null);
-            setLeftComments('');
-            setRightComments('');
-          }
-        }
+  // In Student.jsx, update the useEffect that monitors activities
+useEffect(() => {
+  const unsubscribe = onSnapshot(
+    query(
+      collection(db, 'activities'),
+      orderBy('currentRound', 'desc'),
+      limit(1)
+    ),
+    (snapshot) => {
+      if (snapshot.empty) {
+        // No activities exist - likely due to reset
+        console.log('No activities found - resetting state');
+        setPhase('wait');
+        setCurrentActivity(null);
+        setStudentName('');
+        setStudentEmail('');
+        setSubmission('');
+        setEvaluationPair(null);
+        setLeftComments('');
+        setRightComments('');
+        setSubmitted(false);
+        setEvaluationSubmitted(false);
+        setReceivedEvaluations([]);
+        setStudentId(null);
+        localStorage.clear();
+        return;
       }
-    );
-  
-    return () => unsubscribe();
-  }, [currentActivity?.currentRound]);
+
+      const activity = {
+        id: snapshot.docs[0].id,
+        ...snapshot.docs[0].data(),
+      };
+      console.log('Activity updated:', activity);
+      
+      setCurrentActivity(activity);
+      setPhase(activity.phase);
+      
+      // Reset evaluation state when round changes
+      if (activity.currentRound !== currentActivity?.currentRound) {
+        console.log('Round changed from', currentActivity?.currentRound, 'to', activity.currentRound);
+        setEvaluationSubmitted(false);
+        setEvaluationPair(null);
+        setLeftComments('');
+        setRightComments('');
+      }
+    },
+    (error) => {
+      console.error('Error monitoring activities:', error);
+    }
+  );
+
+  return () => unsubscribe();
+}, [currentActivity?.currentRound]);
 
   // Handle submission
   const handleSubmit = async (event) => {
@@ -99,6 +121,26 @@ function Student() {
       console.error('Error submitting:', error);
     }
   };
+
+  const handleReset = () => {
+    // Reset all local state
+    setPhase('wait');
+    setCurrentActivity(null);
+    setStudentName('');
+    setStudentEmail('');
+    setSubmission('');
+    setEvaluationPair(null);
+    setLeftComments('');
+    setRightComments('');
+    setSubmitted(false);
+    setEvaluationSubmitted(false);
+    setReceivedEvaluations([]);
+    setStudentId(null);
+    
+    // Clear localStorage
+    localStorage.clear();
+  };
+
 
   // Function to get assigned student ID
   const getAssignedStudentId = async (email) => {

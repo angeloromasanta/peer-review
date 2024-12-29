@@ -13,7 +13,8 @@ export const initializeEvaluationManager = async (activityId) => {
     query(collection(db, 'submissions'), where('activityId', '==', activityId))
   );
 
-  studentIds = submissionsSnapshot.docs.map((doc) => doc.id);
+  // Change to use student emails instead of doc IDs
+  studentIds = submissionsSnapshot.docs.map((doc) => doc.data().studentEmail);
   scores = Object.fromEntries(studentIds.map((id) => [id, 0]));
   evaluatedPapersByStudent = Object.fromEntries(
     studentIds.map((id) => [id, []])
@@ -142,6 +143,13 @@ const assignEvaluators = (pairings) => {
   return currentRoundEvaluatorAssigned;
 };
 
+export const resetEvaluationManager = () => {
+  studentIds = [];
+  scores = {};
+  pairingsSoFar = [];
+  evaluatedPapersByStudent = {};
+};
+
 // Function to run the evaluation round
 export const runEvaluationRound = async (activityId) => {
   console.log('Starting evaluation round for activity:', activityId);
@@ -156,30 +164,15 @@ export const runEvaluationRound = async (activityId) => {
   console.log('Created pairings:', pairings);
   
   const evaluators = assignEvaluators(pairings);
-  console.log('Assigned evaluators:', evaluators);
   
-  // Map student IDs to emails for the return value
-  const submissionsSnapshot = await getDocs(
-    query(collection(db, 'submissions'), where('activityId', '==', activityId))
-  );
-  
-  const idToEmailMap = {};
-  submissionsSnapshot.docs.forEach(doc => {
-    idToEmailMap[doc.id] = doc.data().studentEmail;
+  // Convert Sets to Arrays for Firebase storage
+  const evaluatorsArrays = {};
+  Object.entries(evaluators).forEach(([email, pairSet]) => {
+    evaluatorsArrays[email] = Array.from(pairSet);
   });
   
-  // Convert the evaluator assignments to use emails instead of IDs
-  const evaluatorsByEmail = {};
-  for (const [evaluatorId, pair] of Object.entries(evaluators)) {
-    const evaluatorEmail = idToEmailMap[evaluatorId];
-    if (evaluatorEmail) {
-      evaluatorsByEmail[evaluatorEmail] = Array.from(pair);
-    }
-  }
-  
-  return evaluatorsByEmail;
+  console.log('Assigned evaluators:', evaluatorsArrays);
+  return evaluatorsArrays;
 };
-
-
 
 

@@ -7,19 +7,57 @@ let scores = {};
 let pairingsSoFar = [];
 let evaluatedPapersByStudent = {};
 
-// Function to initialize the evaluation manager
-export const initializeEvaluationManager = async (activityId) => {
-  const submissionsSnapshot = await getDocs(
-    query(collection(db, 'submissions'), where('activityId', '==', activityId))
-  );
+// Function to initialize everything at the start of the activity
+export const initializeActivity = async (activityId) => {
+  try {
+    // Get all submissions
+    const submissionsSnapshot = await getDocs(
+      query(collection(db, 'submissions'), where('activityId', '==', activityId))
+    );
 
-  // Change to use student emails instead of doc IDs
-  studentIds = submissionsSnapshot.docs.map((doc) => doc.data().studentEmail);
-  scores = Object.fromEntries(studentIds.map((id) => [id, 0]));
-  evaluatedPapersByStudent = Object.fromEntries(
-    studentIds.map((id) => [id, []])
-  );
-  pairingsSoFar = [];
+    // Initialize student IDs and empty evaluation tracking
+    studentIds = submissionsSnapshot.docs.map((doc) => doc.data().studentEmail);
+    pairingsSoFar = [];
+    evaluatedPapersByStudent = Object.fromEntries(
+      studentIds.map((id) => [id, []])
+    );
+
+    // Initialize scores to 0
+    scores = Object.fromEntries(
+      studentIds.map((id) => [id, 0])
+    );
+
+  } catch (error) {
+    console.error('Error initializing activity:', error);
+    throw error;
+  }
+};
+
+// Function to update scores at the start of each round
+export const updateScores = async (activityId) => {
+  try {
+    const evaluationsSnapshot = await getDocs(
+      query(collection(db, 'evaluations'), where('activityId', '==', activityId))
+    );
+
+    // Calculate current scores based on evaluations
+    const calculatedScores = {};
+    evaluationsSnapshot.docs.forEach((doc) => {
+      const evaluation = doc.data();
+      calculatedScores[evaluation.winner] = (calculatedScores[evaluation.winner] || 0) + 1;
+    });
+
+    // Update scores
+    scores = Object.fromEntries(
+      studentIds.map((id) => [
+        id,
+        calculatedScores[id] || 0
+      ])
+    );
+  } catch (error) {
+    console.error('Error updating scores:', error);
+    throw error;
+  }
 };
 
 // Function to create triads
@@ -28,6 +66,12 @@ const createTriads = () => {
     const shuffledStudentIds = [...studentIds].sort(() => Math.random() - 0.5);
     const sortedStudentIds = shuffledStudentIds.sort((a, b) => scores[b] - scores[a]);
   
+      console.log('Students with scores before shuffling:', 
+    studentIds.map(id => ({ student: id, score: scores[id] }))
+  );
+  console.log('Students with scores after shuffling and sorting:', 
+    sortedStudentIds.map(id => ({ student: id, score: scores[id] }))
+  );
     for (let i = 0; i < sortedStudentIds.length; i++) {
       if (!currentRoundTriads.some(triad => triad.has(sortedStudentIds[i]))) {
         for (let j = i + 1; j < sortedStudentIds.length; j++) {
@@ -166,15 +210,18 @@ export const resetEvaluationManager = () => {
 export const runEvaluationRound = async (activityId) => {
   console.log('Starting evaluation round for activity:', activityId);
   
-  await initializeEvaluationManager(activityId);
-  console.log('Initialized with students:', studentIds);
+  // Only initialize activity if it's the first round (pairingsSoFar is empty)
+  if (pairingsSoFar.length === 0) {
+    await initializeActivity(activityId);
+  }
+  
+  // Update scores for this round
+  await updateScores(activityId);
+  
+  console.log('Running round with students:', studentIds);
   
   const triads = createTriads();
-  console.log('Created triads:', triads);
-  
   const pairings = createPairings(triads);
-  console.log('Created pairings:', pairings);
-  
   const evaluators = assignEvaluators(pairings);
   
   // Convert Sets to Arrays for Firebase storage

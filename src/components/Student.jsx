@@ -923,7 +923,7 @@ useEffect(() => {
         </div>
         <h1 className="text-2xl mb-4">Evaluation Summary</h1>
         <p className="mb-6">
-          Your submission received {receivedEvaluations.length} positive evaluations.
+          Your submission received {receivedEvaluations.length} evaluations.
         </p>
         <div className="space-y-4">
           <h2 className="text-xl font-semibold">Comments received:</h2>

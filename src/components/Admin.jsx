@@ -116,56 +116,57 @@ function Admin() {
   }, [currentActivity]);
 
 
+  // Update the getPendingEvaluators useEffect with proper checks
   useEffect(() => {
     const getPendingEvaluators = async () => {
-      if (!currentActivity || phase !== 'evaluate') {
+      // Exit early if we don't have an activity ID or we're not in evaluate phase
+      if (!currentActivity?.id || phase !== 'evaluate') {
         setPendingEvaluators([]);
         return;
       }
-
+  
       try {
         // Get all submissions for this activity
         const submissionsSnapshot = await getDocs(
           query(collection(db, 'submissions'),
             where('activityId', '==', currentActivity.id))
         );
-
+  
         // Get all evaluations for current round
         const evaluationsSnapshot = await getDocs(
           query(collection(db, 'evaluations'),
             where('activityId', '==', currentActivity.id),
-            where('round', '==', currentActivity.currentRound))
+            where('round', '==', currentActivity?.currentRound || 1))
         );
-
+  
         // Create a map of evaluator email to number of evaluations completed
         const evaluatorCounts = {};
         evaluationsSnapshot.docs.forEach(doc => {
           const evaluatorEmail = doc.data().evaluatorEmail;
           evaluatorCounts[evaluatorEmail] = (evaluatorCounts[evaluatorEmail] || 0) + 1;
         });
-
+  
         // Get all students who should evaluate
         const allEvaluators = submissionsSnapshot.docs.map(doc => ({
           name: doc.data().studentName,
           email: doc.data().studentEmail,
           evaluationsCompleted: evaluatorCounts[doc.data().studentEmail] || 0,
-          evaluationsRequired: submissionsSnapshot.docs.length - 1 // Everyone needs to evaluate all others except themselves
+          evaluationsRequired: 1  // Each student evaluates one pair per round
         }));
-
-        // Filter for pending evaluators (those who haven't completed all required evaluations)
+  
+        // Filter for pending evaluators (those who haven't completed their evaluation for this round)
         const pending = allEvaluators.filter(
           evaluator => evaluator.evaluationsCompleted < evaluator.evaluationsRequired
         );
-
+  
         setPendingEvaluators(pending);
       } catch (error) {
         console.error('Error getting pending evaluators:', error);
       }
     };
-
+  
     getPendingEvaluators();
-  }, [currentActivity, phase, evaluations, currentActivity?.currentRound]);
-
+  }, [currentActivity?.id, phase, evaluations, currentActivity?.currentRound]);
 
   useEffect(() => {
     if (!currentActivity) return;
@@ -466,48 +467,82 @@ function Admin() {
   );
 
 
-
   const exportData = async () => {
     if (!currentActivity) return;
-
+  
     try {
       // Fetch all relevant data
       const submissionsSnapshot = await getDocs(
         query(collection(db, 'submissions'),
           where('activityId', '==', currentActivity.id))
       );
+      
       const evaluationsSnapshot = await getDocs(
         query(collection(db, 'evaluations'),
           where('activityId', '==', currentActivity.id))
       );
-
-      // Prepare data for export
-      const submissions = submissionsSnapshot.docs.map(doc => doc.data());
+  
+      const submissions = submissionsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
       const evaluations = evaluationsSnapshot.docs.map(doc => doc.data());
-
+  
+      // Group comments by submission
+      const submissionComments = {};
+      evaluations.forEach(ev => {
+        // Add left submission comments
+        if (ev.leftComments && ev.leftSubmissionId) {
+          if (!submissionComments[ev.leftSubmissionId]) {
+            submissionComments[ev.leftSubmissionId] = [];
+          }
+          submissionComments[ev.leftSubmissionId].push({
+            comment: ev.leftComments,
+            evaluator: ev.evaluatorEmail,
+            round: ev.round
+          });
+        }
+        
+        // Add right submission comments
+        if (ev.rightComments && ev.rightSubmissionId) {
+          if (!submissionComments[ev.rightSubmissionId]) {
+            submissionComments[ev.rightSubmissionId] = [];
+          }
+          submissionComments[ev.rightSubmissionId].push({
+            comment: ev.rightComments,
+            evaluator: ev.evaluatorEmail,
+            round: ev.round
+          });
+        }
+      });
+  
+      // Format comments for each submission
+      const formatComments = (submissionId) => {
+        const comments = submissionComments[submissionId] || [];
+        return comments
+          .filter(c => c.comment) // Only include non-empty comments
+          .map(c => `Round ${c.round}: ${c.comment} (${c.evaluator})`)
+          .join('\n');
+      };
+  
       // Create CSV content
       const csvContent = [
         // Headers
-        ['Student Name', 'Email', 'Submission', 'Points', 'Evaluations Given', 'Evaluations Received'].join(','),
+        ['Student Name', 'Email', 'Submission', 'Points', 'Comments Received'].join(','),
         // Data rows
         ...submissions.map(sub => {
-          const evaluationsGiven = evaluations.filter(ev => ev.evaluatorEmail === sub.studentEmail).length;
-          const evaluationsReceived = evaluations.filter(ev =>
-            (ev.leftSubmissionId === sub.id && ev.winner === sub.id) ||
-            (ev.rightSubmissionId === sub.id && ev.winner === sub.id)
-          ).length;
-
+          const formattedComments = formatComments(sub.id);
           return [
             sub.studentName,
             sub.studentEmail,
-            `"${sub.content.replace(/"/g, '""')}"`,
+            `"${sub.content?.content ? sub.content.content.replace(/"/g, '""') : sub.content?.replace(/"/g, '""')}"`,
             rankings.find(r => r.id === sub.id)?.score || 0,
-            evaluationsGiven,
-            evaluationsReceived
+            `"${formattedComments.replace(/"/g, '""')}"`
           ].join(',');
         })
       ].join('\n');
-
+  
       // Download file
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
@@ -518,6 +553,7 @@ function Admin() {
       console.error('Error exporting data:', error);
     }
   };
+
 
 
 
@@ -592,7 +628,7 @@ function Admin() {
           <div className="bg-white p-6 rounded-lg shadow">
   <h2 className="text-xl font-semibold mb-4">Progress</h2>
   <p className="text-lg mb-2">
-    Completed evaluations: {evaluations.length} / {submissions.length * (submissions.length - 1)}
+    Completed evaluations: {evaluations.length} / {submissions.length}
   </p>
   {submissions.length > 0 && (
     <>
@@ -683,6 +719,18 @@ function Admin() {
         <ResetButton />
         <div className="card">
           <h2 className="text-xl font-semibold mb-4">Final Rankings</h2>
+          <div className="mb-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={hideRankingNames}
+                onChange={(e) => setHideRankingNames(e.target.checked)}
+                className="form-checkbox"
+              />
+              <span>Hide Names in Rankings</span>
+            </label>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">

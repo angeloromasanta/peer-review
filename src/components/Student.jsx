@@ -730,9 +730,8 @@ useEffect(() => {
         </div>
       );
     }
-
+  
     return (
-
       <div className="p-8">
         <div className="bg-gray-100 p-4 mb-6 rounded-lg">
           <h2 className="text-lg font-semibold">
@@ -764,49 +763,62 @@ useEffect(() => {
             />
           </div>
           <div>
-          <div className="space-y-4">
-         
-            <div
-              className="border p-2 w-full min-h-32 bg-white"
-              contentEditable
-              suppressContentEditableWarning={true}
-              onPaste={handlePaste}
-              onInput={(e) => setTextContent(e.currentTarget.innerHTML)}
-              placeholder="Paste or type your submission here"
-              dangerouslySetInnerHTML={{ __html: textContent }}
-            />
-
-            {/* No need for file input anymore */}
-
-            {/* Image preview (using temporary URLs) */}
-            {tempImageUrls.length > 0 && (
-              <div className="grid grid-cols-2 gap-4 mt-4">
-                {tempImageUrls.map((imageUrl, index) => (
-                  <div key={index} className="relative">
-                    <img
-                      src={imageUrl}
-                      alt={`Upload preview ${index + 1}`}
-                      className="max-w-full h-auto"
-                    />
-                    <button
-                      onClick={() => {
-                        setTempImageUrls(prev => prev.filter((_, i) => i !== index));
-                        // Also remove the image tag from textContent
-                        setTextContent(prevContent => prevContent.replace(`<img src="${imageUrl}" alt="Pasted Image" />`, ''));
-                      }}
-                      className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6"
-                    >
-                      ×
-                    </button>
+            <div className="space-y-4">
+              <div className="relative">
+                <div
+                  ref={(element) => {
+                    if (element && !element.innerHTML && textContent) {
+                      element.innerHTML = textContent;
+                    }
+                  }}
+                  className="border p-2 w-full min-h-32 bg-white"
+                  contentEditable
+                  suppressContentEditableWarning={true}
+                  onPaste={handlePaste}
+                  onInput={(e) => {
+                    const newContent = e.currentTarget.innerHTML;
+                    if (newContent !== textContent) {
+                      setTextContent(newContent);
+                    }
+                  }}
+                />
+                {!textContent && (
+                  <div className="absolute top-2 left-2 text-gray-400 pointer-events-none">
+                    Paste or type your submission here
                   </div>
-                ))}
+                )}
               </div>
-            )}
-          </div>
+  
+              {/* Image preview (using temporary URLs) */}
+              {tempImageUrls.length > 0 && (
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  {tempImageUrls.map((imageUrl, index) => (
+                    <div key={index} className="relative">
+                      <img
+                        src={imageUrl}
+                        alt={`Upload preview ${index + 1}`}
+                        className="max-w-full h-auto"
+                      />
+                      <button
+                        onClick={() => {
+                          setTempImageUrls(prev => prev.filter((_, i) => i !== index));
+                          setTextContent(prevContent => 
+                            prevContent.replace(`<img src="${imageUrl}" alt="Pasted Image" />`, '')
+                          );
+                        }}
+                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <button
             type="submit"
-            className="bg-blue-500 text-white px-4 py-2 rounded"
+            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
           >
             Submit
           </button>
@@ -814,6 +826,7 @@ useEffect(() => {
       </div>
     );
   }
+  
 
   if (phase === 'evaluate') {
     if (!studentEmail || !studentId) {

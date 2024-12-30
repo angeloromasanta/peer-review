@@ -12,10 +12,14 @@ import {
   onSnapshot,
   limit,
   orderBy,
+  arrayUnion,
+  updateDoc,
 } from 'firebase/firestore';
 import _ from 'lodash';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes, getDownloadURL, 
+  deleteObject  } from 'firebase/storage';
 import { runEvaluationRound } from './evaluationManager';
+
 
 function Student() {
   // State declarations
@@ -35,6 +39,7 @@ const [images, setImages] = useState([]);
 const [tempImageUrls, setTempImageUrls] = useState([]); // Temporary URLs for preview
 
 
+const storage = getStorage();
   const [studentId, setStudentId] = useState(() =>
     localStorage.getItem('studentId') ? Number(localStorage.getItem('studentId')) : null
   );
@@ -117,45 +122,203 @@ useEffect(() => {
 }, [currentActivity?.currentRound]);
 
 
-const handlePaste = async (e) => {
-  const items = e.clipboardData?.items;
-  if (!items) return;
 
+const handlePaste = async (e) => {
+  console.log('Paste event triggered');
+  const items = e.clipboardData?.items;
+  
+  if (!items) {
+    console.log('No clipboard items found');
+    return;
+  }
+  
+  // Log all clipboard items
+  console.log('All clipboard items:', Array.from(items).map(item => ({
+    kind: item.kind,
+    type: item.type
+  })));
+
+  // First check for direct image paste
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (item.type.indexOf('image') !== -1) {
-      e.preventDefault();
-      const file = item.getAsFile();
-      if (file) {
-        try {
-          // Upload to Firebase Storage immediately
-          const storageRef = ref(storage, `temp/${studentEmail}/${Date.now()}-${file.name}`);
-          const snapshot = await uploadBytes(storageRef, file);
-          const downloadURL = await getDownloadURL(snapshot.ref);
+      console.log('Found direct image paste');
+      await handleDirectImagePaste(item);
+      return;
+    }
+  }
 
-          // Add to temporary image URLs for preview
-          setTempImageUrls(prev => [...prev, downloadURL]);
+  // If no direct image, check for HTML content
+  const htmlItem = Array.from(items).find(item => item.type === 'text/html');
+  if (htmlItem) {
+    console.log('Found HTML content, checking for image');
+    htmlItem.getAsString(async (htmlString) => {
+      console.log('HTML content:', htmlString);
+      
+      // Create a temporary element to parse the HTML
+      const temp = document.createElement('div');
+      temp.innerHTML = htmlString;
+      
+      // Find all img elements in the pasted HTML
+      const images = temp.getElementsByTagName('img');
+      console.log('Found images in HTML:', images.length);
 
-          // Append an image tag to textContent
-          setTextContent(prevContent => prevContent + `<img src="${downloadURL}" alt="Pasted Image" />`);
-        } catch (error) {
-          console.error('Error uploading image:', error);
-          alert('Failed to upload image. Please try again.');
+      if (images.length > 0) {
+        // Prevent default paste for images
+        e.preventDefault();
+
+        for (const img of images) {
+          const imgSrc = img.src;
+          console.log('Processing image with src:', imgSrc);
+
+          try {
+            // Fetch the image
+            const response = await fetch(imgSrc);
+            console.log('Fetch response:', response.status);
+            if (!response.ok) throw new Error('Failed to fetch image');
+
+            const blob = await response.blob();
+            console.log('Got blob:', blob.type, blob.size);
+
+            // Create a file from the blob
+            const file = new File([blob], `pasted-image-${Date.now()}.png`, {
+              type: blob.type || 'image/png'
+            });
+
+            // Upload to Firebase
+            await handleImageFile(file);
+          } catch (error) {
+            console.error('Error processing HTML image:', error);
+          }
         }
       }
-    }
+    });
   }
 };
 
-const handleFileSelect = (e) => {
-  const files = Array.from(e.target.files || []);
-  const imageFiles = files.filter(file => file.type.startsWith('image/'));
-  setImages(prev => [...prev, ...imageFiles]);
+const handleDirectImagePaste = async (item) => {
+  const file = item.getAsFile();
+  if (!file) {
+    console.log('No file in clipboard item');
+    return;
+  }
+
+  console.log('Image file details:', {
+    name: file.name,
+    size: file.size,
+    type: file.type
+  });
+
+  await handleImageFile(file);
+};
+
+const handleImageFile = async (file) => {
+  try {
+    // Generate a preview using FileReader
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      console.log('FileReader loaded');
+      const base64data = event.target.result;
+      console.log('Generated base64 data of length:', base64data.length);
+
+      const pasteId = Date.now();
+      
+      // Create placeholder with base64 preview
+      const imgPlaceholder = `<img 
+        src="${base64data}" 
+        id="paste-${pasteId}"
+        class="max-w-full h-auto my-2 opacity-50 transition-opacity" 
+        alt="Uploading..." 
+      />`;
+
+      // Insert the placeholder
+      setTextContent(prev => prev + imgPlaceholder);
+
+      try {
+        // Upload to Firebase
+        console.log('Starting Firebase upload');
+        const filename = `paste-${pasteId}.png`;
+        const storageRef = ref(storage, `temp/${studentEmail}/${filename}`);
+        
+        const metadata = {
+          contentType: file.type || 'image/png',
+          customMetadata: {
+            uploadedBy: studentEmail
+          }
+        };
+        
+        const snapshot = await uploadBytes(storageRef, file, metadata);
+        console.log('Upload completed:', snapshot);
+        
+        const firebaseUrl = await getDownloadURL(snapshot.ref);
+        console.log('Got Firebase URL:', firebaseUrl);
+
+        // Track the URL
+        setTempImageUrls(prev => [...prev, firebaseUrl]);
+
+        // Update the image source
+        const imgElement = document.getElementById(`paste-${pasteId}`);
+        if (imgElement) {
+          imgElement.src = firebaseUrl;
+          imgElement.classList.remove('opacity-50');
+          // Update content state
+          const editableDiv = document.querySelector('[contenteditable]');
+          if (editableDiv) {
+            setTextContent(editableDiv.innerHTML);
+          }
+        }
+      } catch (error) {
+        console.error('Firebase upload error:', error);
+        const imgElement = document.getElementById(`paste-${pasteId}`);
+        if (imgElement) {
+          imgElement.remove();
+          const editableDiv = document.querySelector('[contenteditable]');
+          if (editableDiv) {
+            setTextContent(editableDiv.innerHTML);
+          }
+        }
+        alert('Failed to upload image. Please try again.');
+      }
+    };
+
+    reader.onerror = (error) => {
+      console.error('FileReader error:', error);
+    };
+
+    console.log('Starting FileReader');
+    reader.readAsDataURL(file);
+
+  } catch (error) {
+    console.error('Top level error in handleImageFile:', error);
+    alert('Failed to process image. Please try again.');
+  }
+};
+
+const ContentEditable = () => {
+  console.log('Rendering ContentEditable, current content length:', textContent.length);
+  
+  return (
+    <div
+      className="border p-2 w-full min-h-32 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+      contentEditable
+      suppressContentEditableWarning={true}
+      onPaste={handlePaste}
+      onInput={(e) => {
+        console.log('Content changed');
+        const content = e.currentTarget.innerHTML;
+        console.log('New content length:', content.length);
+        setTextContent(content);
+      }}
+      dangerouslySetInnerHTML={{ __html: textContent }}
+      role="textbox"
+      aria-multiline="true"
+    />
+  );
 };
 
 
+
 // Handle submission
-const storage = getStorage();
 
 
 const handleSubmit = async (event) => {
@@ -163,9 +326,14 @@ const handleSubmit = async (event) => {
   if (!currentActivity || submitted) return;
 
   try {
-    console.log('Handling submission with:', { studentName, studentEmail });
+    console.log('Starting submission process:', { studentName, studentEmail });
+    
+    // 1. Validate input
+    if (!studentName.trim() || !studentEmail.trim() || !textContent.trim()) {
+      throw new Error('Please fill in all required fields');
+    }
 
-    // 1. Check if already submitted this activity
+    // 2. Check for existing submissions
     const existingSubmissions = await getDocs(
       query(
         collection(db, 'submissions'),
@@ -182,14 +350,14 @@ const handleSubmit = async (event) => {
       return;
     }
 
-    // 2. Get or create student ID
+    // 3. Get or create student ID
+    let studentId;
     const studentQuery = query(
       collection(db, 'students'),
       where('email', '==', studentEmail)
     );
     const studentSnapshot = await getDocs(studentQuery);
 
-    let studentId;
     if (!studentSnapshot.empty) {
       studentId = studentSnapshot.docs[0].data().studentId;
     } else {
@@ -204,79 +372,128 @@ const handleSubmit = async (event) => {
 
       await addDoc(collection(db, 'students'), {
         email: studentEmail,
+        name: studentName,
         studentId: studentId,
+        createdAt: new Date()
       });
     }
 
-    // 3. Handle Temporary Image URLs
+    // 4. Process content and handle images
     let finalContent = textContent;
-    for (const tempUrl of tempImageUrls) {
-      if (finalContent.includes(tempUrl)) {
-        // 3.a. Extract Filename (Optional)
-        // If you need the original filename, try to extract it from the temporary URL.
-        const filenameMatch = tempUrl.match(/\/([^/?]+)(?:\?|$)/);
-        const filename = filenameMatch ? filenameMatch[1] : Date.now(); // Use timestamp if no filename
+    const imageUrls = new Set();
+    const failedImages = new Set();
+    
+    // Extract all image URLs from content
+    const imgRegex = /<img[^>]+src="([^"]+)"[^>]*>/g;
+    let match;
+    while ((match = imgRegex.exec(finalContent)) !== null) {
+      imageUrls.add(match[1]);
+    }
 
-        // 3.b. Fetch Image from Temporary URL
-        const response = await fetch(tempUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image from temporary URL: ${tempUrl}`);
+    // Process each image
+    for (const imageUrl of imageUrls) {
+      try {
+        if (imageUrl.includes('/temp/')) {  // Only process temporary images
+          // 4a. Extract filename and generate new path
+          const filename = imageUrl.split('/').pop().split('?')[0];
+          const permanentPath = `submissions/${currentActivity.id}/${studentId}/${filename}`;
+          
+          // 4b. Fetch image from temporary URL
+          const response = await fetch(imageUrl);
+          if (!response.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
+          const blob = await response.blob();
+
+          // 4c. Upload to permanent location
+          const permanentRef = ref(storage, permanentPath);
+          const metadata = {
+            contentType: blob.type,
+            customMetadata: {
+              originalUrl: imageUrl,
+              submissionId: `${currentActivity.id}_${studentId}`,
+              uploadedAt: new Date().toISOString()
+            }
+          };
+
+          await uploadBytes(permanentRef, blob, metadata);
+          const permanentUrl = await getDownloadURL(permanentRef);
+
+          // 4d. Replace URL in content
+          finalContent = finalContent.replace(
+            new RegExp(imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+            permanentUrl
+          );
+
+          // 4e. Clean up temporary file
+          try {
+            const tempRef = ref(storage, imageUrl.split('.com/o/')[1].split('?')[0]);
+            await deleteObject(tempRef);
+          } catch (cleanupError) {
+            console.warn('Failed to cleanup temp file:', cleanupError);
+            // Continue despite cleanup failure
+          }
         }
-        const blob = await response.blob();
-
-        // 3.c. Upload to Permanent Location
-        const storageRef = ref(storage, `submissions/${currentActivity.id}/${studentId}/${filename}`);
-        await uploadBytes(storageRef, blob);
-        const permanentUrl = await getDownloadURL(storageRef);
-
-        // 3.d. Replace Temporary URL with Permanent URL
-        finalContent = finalContent.replace(tempUrl, permanentUrl);
+      } catch (imageError) {
+        console.error('Failed to process image:', imageError);
+        failedImages.add(imageUrl);
       }
     }
 
-    // 4. Prepare the Submission Content
-    const submissionContent = {
-      // Now contains permanent URLs (if any)
-      content: finalContent,
-      type: 'rich-content', // You might want to adjust this based on your content
-      version: '1.0',
-    };
-
-    // 5. Validate Content (Optional)
-    // You can add more specific validation here if needed
-    if (!submissionContent.content.trim() && !submissionContent.content.includes('<img')) {
-      throw new Error('Submission must include either text or images.');
+    // 5. Check for failed images
+    if (failedImages.size > 0) {
+      throw new Error(`Failed to process ${failedImages.size} images. Please try again.`);
     }
 
-    // 6. Create Submission Document
-    await addDoc(collection(db, 'submissions'), {
+    // 6. Prepare submission content
+    const submissionContent = {
+      content: finalContent,
+      type: 'rich-content',
+      version: '1.0',
+      metadata: {
+        hasImages: imageUrls.size > 0,
+        imageCount: imageUrls.size,
+        textLength: finalContent.replace(/<[^>]+>/g, '').trim().length,
+        lastModified: new Date().toISOString()
+      }
+    };
+
+    // 7. Create submission document
+    const submissionDoc = await addDoc(collection(db, 'submissions'), {
       activityId: currentActivity.id,
       studentName,
       studentEmail,
       studentId,
-      content: submissionContent.content, // Store the content with permanent URLs
+      content: submissionContent.content,
+      metadata: submissionContent.metadata,
       timestamp: new Date(),
-      metadata: {
-        // You may need to adjust this based on your content analysis
-        hasImages: finalContent.includes('<img'),
-        imageCount: (finalContent.match(/<img/g) || []).length,
-        textLength: finalContent.replace(/<[^>]+>/g, '').trim().length, // Remove HTML tags to get text length
-        submissionType: 'rich-content',
-      },
+      status: 'submitted',
+      version: '1.0'
     });
 
-    // 7. Update Local State
+    console.log('Submission successful:', submissionDoc.id);
+
+    // 8. Update local state
     setStudentId(studentId);
     setSubmitted(true);
-
-    // 8. Clear Form
     setTextContent('');
     setTempImageUrls([]);
+
+    // Optional: Add submission to activity's submissions array
+    try {
+      const activityRef = doc(db, 'activities', currentActivity.id);
+      await updateDoc(activityRef, {
+        submissions: arrayUnion(submissionDoc.id)
+      });
+    } catch (activityUpdateError) {
+      console.warn('Failed to update activity with submission ID:', activityUpdateError);
+      // Continue despite failure as this is not critical
+    }
+
   } catch (error) {
-    console.error('Error submitting:', error);
+    console.error('Error in submission process:', error);
     alert(
-      'Error submitting your work. Please check the console for more details and try again.'
+      error.message || 'Error submitting your work. Please check the console for more details and try again.'
     );
+    throw error; // Re-throw to allow caller to handle if needed
   }
 };
 
@@ -619,19 +836,18 @@ useEffect(() => {
     }
 
  // In Student.jsx, find the evaluation phase section that looks like this:
-if (evaluationPair) {
+ if (evaluationPair) {
   return (
     <div className="p-8">
       <h1 className="text-2xl mb-4">Evaluate Submissions</h1>
       <div className="grid grid-cols-2 gap-8">
         {/* Left Submission */}
         <div className="border p-4">
-          {/* Add this header section */}
           <div className="mb-2 text-sm font-medium text-gray-500">
             Submission by: {currentActivity?.hideNames ? "Anonymous Submission" : evaluationPair.left.studentName}
           </div>
           <div className="h-48 overflow-y-auto mb-4">
-            <p>{evaluationPair.left.content}</p>
+            <div dangerouslySetInnerHTML={{ __html: evaluationPair.left.content }} />
           </div>
           <textarea
             value={leftComments}
@@ -649,12 +865,11 @@ if (evaluationPair) {
 
         {/* Right Submission */}
         <div className="border p-4">
-          {/* Add this header section */}
           <div className="mb-2 text-sm font-medium text-gray-500">
             Submission by: {currentActivity?.hideNames ? "Anonymous Submission" : evaluationPair.right.studentName}
           </div>
           <div className="h-48 overflow-y-auto mb-4">
-            <p>{evaluationPair.right.content}</p>
+            <div dangerouslySetInnerHTML={{ __html: evaluationPair.right.content }} />
           </div>
           <textarea
             value={rightComments}

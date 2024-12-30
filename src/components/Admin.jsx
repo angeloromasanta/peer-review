@@ -28,72 +28,74 @@ function Admin() {
   const [submissions, setSubmissions] = useState([]);
   const [evaluations, setEvaluations] = useState([]);
   const [rankings, setRankings] = useState([]);
+  const [hideRankingNames, setHideRankingNames] = useState(false);
+  const [hideNames, setHideNames] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
   // In Admin.jsx, add initial activity fetch
-// Add this at the beginning right after the state declarations
-useEffect(() => {
-  const fetchCurrentActivity = async () => {
-    try {
-      // Query the most recent activity
-      const activitiesQuery = query(
-        collection(db, 'activities'),
-        orderBy('currentRound', 'desc'),
-        limit(1)
-      );
-      
-      const activitiesSnapshot = await getDocs(activitiesQuery);
-      
-      if (!activitiesSnapshot.empty) {
-        const activity = {
-          id: activitiesSnapshot.docs[0].id,
-          ...activitiesSnapshot.docs[0].data()
-        };
-        console.log('Found existing activity:', activity);
-        setCurrentActivity(activity);
-        setPhase(activity.phase);
-        setActivityName(activity.name);
-      } else {
-        console.log('No existing activity found, starting fresh');
+  // Add this at the beginning right after the state declarations
+  useEffect(() => {
+    const fetchCurrentActivity = async () => {
+      try {
+        // Query the most recent activity
+        const activitiesQuery = query(
+          collection(db, 'activities'),
+          orderBy('currentRound', 'desc'),
+          limit(1)
+        );
+
+        const activitiesSnapshot = await getDocs(activitiesQuery);
+
+        if (!activitiesSnapshot.empty) {
+          const activity = {
+            id: activitiesSnapshot.docs[0].id,
+            ...activitiesSnapshot.docs[0].data()
+          };
+          console.log('Found existing activity:', activity);
+          setCurrentActivity(activity);
+          setPhase(activity.phase);
+          setActivityName(activity.name);
+        } else {
+          console.log('No existing activity found, starting fresh');
+          setPhase('init');
+        }
+      } catch (error) {
+        console.error('Error fetching current activity:', error);
         setPhase('init');
       }
-    } catch (error) {
-      console.error('Error fetching current activity:', error);
-      setPhase('init');
-    }
-  };
+    };
 
-  fetchCurrentActivity();
-}, []); // Empty dependency array means this runs once on mount
+    fetchCurrentActivity();
+  }, []); // Empty dependency array means this runs once on mount
 
-// Then update the existing activity listener useEffect to handle both creation and updates
-useEffect(() => {
-  if (!currentActivity) return;
+  // Then update the existing activity listener useEffect to handle both creation and updates
+  useEffect(() => {
+    if (!currentActivity) return;
 
-  console.log('Setting up activity listener for:', currentActivity.id);
-  
-  const unsubscribe = onSnapshot(
-    doc(db, 'activities', currentActivity.id),
-    (doc) => {
-      if (doc.exists()) {
-        const data = doc.data();
-        setPhase(data.phase);
-        console.log('Activity updated:', data);
-      } else {
-        // Activity was deleted
-        console.log('Activity no longer exists');
-        setPhase('init');
-        setCurrentActivity(null);
-        setActivityName('');
+    console.log('Setting up activity listener for:', currentActivity.id);
+
+    const unsubscribe = onSnapshot(
+      doc(db, 'activities', currentActivity.id),
+      (doc) => {
+        if (doc.exists()) {
+          const data = doc.data();
+          setPhase(data.phase);
+          console.log('Activity updated:', data);
+        } else {
+          // Activity was deleted
+          console.log('Activity no longer exists');
+          setPhase('init');
+          setCurrentActivity(null);
+          setActivityName('');
+        }
+      },
+      (error) => {
+        console.error('Error listening to activity:', error);
       }
-    },
-    (error) => {
-      console.error('Error listening to activity:', error);
-    }
-  );
+    );
 
-  return () => unsubscribe();
-}, [currentActivity?.id]); // Only re-run if activity ID changes
+    return () => unsubscribe();
+  }, [currentActivity?.id]); // Only re-run if activity ID changes
 
   useEffect(() => {
     if (!currentActivity) return;
@@ -136,37 +138,37 @@ useEffect(() => {
 
   const resetApplication = async () => {
     if (isResetting) return;
-  
+
     try {
       setIsResetting(true);
-  
+
       // Delete all students
       const studentsSnapshot = await getDocs(collection(db, 'students'));
       for (const doc of studentsSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-  
+
       // Delete all submissions
       const submissionsSnapshot = await getDocs(collection(db, 'submissions'));
       for (const doc of submissionsSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-  
+
       // Delete all evaluations
       const evaluationsSnapshot = await getDocs(collection(db, 'evaluations'));
       for (const doc of evaluationsSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-  
+
       // Delete all activities
       const activitiesSnapshot = await getDocs(collection(db, 'activities'));
       for (const doc of activitiesSnapshot.docs) {
         await deleteDoc(doc.ref);
       }
-  
+
       // Reset evaluation manager
       resetEvaluationManager();
-  
+
       // Reset all local state
       setPhase('init');
       setActivityName('');
@@ -174,10 +176,10 @@ useEffect(() => {
       setSubmissions([]);
       setEvaluations([]);
       setRankings([]);
-  
+
       // Clear localStorage
       localStorage.clear();
-  
+
       console.log('Application reset complete');
     } catch (error) {
       console.error('Error resetting application:', error);
@@ -197,62 +199,80 @@ useEffect(() => {
     setPhase('submit');
   };
 
+
   const startEvaluation = async () => {
     if (!currentActivity) return;
   
-    const evaluators = await runEvaluationRound(currentActivity.id);
-    console.log('Evaluators assigned:', evaluators);
+    try {
+      console.log('Starting evaluation phase...');
+      
+      // Run evaluation round and get assignments
+      const evaluators = await runEvaluationRound(currentActivity.id);
+      console.log('Evaluators assigned:', evaluators);
   
-    await updateDoc(doc(db, 'activities', currentActivity.id), {
-      phase: 'evaluate',
-      currentRound: 1,
-    });
-    setPhase('evaluate');
+      // Update activity document with phase, round, and assignments
+      await updateDoc(doc(db, 'activities', currentActivity.id), {
+        phase: 'evaluate',
+        currentRound: 1,
+        hideNames: hideNames,
+        evaluatorAssignments: evaluators // Store the assignments
+      });
+  
+      console.log('Updated activity with assignments:', {
+        phase: 'evaluate',
+        currentRound: 1,
+        evaluatorAssignments: evaluators
+      });
+  
+      setPhase('evaluate');
+    } catch (error) {
+      console.error('Error starting evaluation:', error);
+    }
   };
-  
 
-  
-// Update startNextRound in Admin.jsx
-const startNextRound = async () => {
-  if (!currentActivity) {
-    console.error('No current activity found');
-    return;
-  }
-
-  try {
-    console.log('Starting next round...');
-    
-    // Get the current activity data
-    const activityDoc = await getDoc(doc(db, 'activities', currentActivity.id));
-    
-    if (!activityDoc.exists()) {
-      console.error('Activity document not found');
+  // Update startNextRound in Admin.jsx
+  const startNextRound = async () => {
+    if (!currentActivity) {
+      console.error('No current activity found');
       return;
     }
-
-    const activityData = activityDoc.data();
-    console.log('Current activity data:', activityData);
-    
-    const currentRound = activityData.currentRound || 1;
-    console.log('Current round:', currentRound);
-    
-    // Run evaluation round and get new assignments
-    const evaluators = await runEvaluationRound(currentActivity.id);
-    console.log('New evaluation assignments:', evaluators);
-    
-    // Update the activity with new round number
-    await updateDoc(doc(db, 'activities', currentActivity.id), {
-      currentRound: currentRound + 1,
-      phase: 'evaluate',
-      evaluatorAssignments: evaluators  // Store assignments in activity
-    });
-    
-    console.log('Successfully updated to round:', currentRound + 1);
-
-  } catch (error) {
-    console.error('Error starting next round:', error);
-  }
-};
+  
+    try {
+      console.log('Starting next round...');
+      
+      // Get the current activity data
+      const activityDoc = await getDoc(doc(db, 'activities', currentActivity.id));
+      
+      if (!activityDoc.exists()) {
+        console.error('Activity document not found');
+        return;
+      }
+  
+      const activityData = activityDoc.data();
+      console.log('Current activity data:', activityData);
+      
+      const currentRound = activityData.currentRound || 1;
+      console.log('Current round:', currentRound);
+      
+      // Run evaluation round and get new assignments
+      const evaluators = await runEvaluationRound(currentActivity.id);
+      console.log('New evaluator assignments:', evaluators);
+      
+      // Update the activity with new round number and assignments
+      const updateData = {
+        currentRound: currentRound + 1,
+        phase: 'evaluate',
+        evaluatorAssignments: evaluators,
+        hideNames: hideNames,
+      };
+  
+      await updateDoc(doc(db, 'activities', currentActivity.id), updateData);
+      console.log('Successfully updated activity with:', updateData);
+      
+    } catch (error) {
+      console.error('Error starting next round:', error);
+    }
+  };
 
   const endEvaluation = async () => {
     if (!currentActivity) return;
@@ -335,6 +355,62 @@ const startNextRound = async () => {
     </button>
   );
 
+
+
+  const exportData = async () => {
+    if (!currentActivity) return;
+
+    try {
+      // Fetch all relevant data
+      const submissionsSnapshot = await getDocs(
+        query(collection(db, 'submissions'),
+          where('activityId', '==', currentActivity.id))
+      );
+      const evaluationsSnapshot = await getDocs(
+        query(collection(db, 'evaluations'),
+          where('activityId', '==', currentActivity.id))
+      );
+
+      // Prepare data for export
+      const submissions = submissionsSnapshot.docs.map(doc => doc.data());
+      const evaluations = evaluationsSnapshot.docs.map(doc => doc.data());
+
+      // Create CSV content
+      const csvContent = [
+        // Headers
+        ['Student Name', 'Email', 'Submission', 'Points', 'Evaluations Given', 'Evaluations Received'].join(','),
+        // Data rows
+        ...submissions.map(sub => {
+          const evaluationsGiven = evaluations.filter(ev => ev.evaluatorEmail === sub.studentEmail).length;
+          const evaluationsReceived = evaluations.filter(ev =>
+            (ev.leftSubmissionId === sub.id && ev.winner === sub.id) ||
+            (ev.rightSubmissionId === sub.id && ev.winner === sub.id)
+          ).length;
+
+          return [
+            sub.studentName,
+            sub.studentEmail,
+            `"${sub.content.replace(/"/g, '""')}"`,
+            rankings.find(r => r.id === sub.id)?.score || 0,
+            evaluationsGiven,
+            evaluationsReceived
+          ].join(',');
+        })
+      ].join('\n');
+
+      // Download file
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${currentActivity.name}_results.csv`;
+      link.click();
+    } catch (error) {
+      console.error('Error exporting data:', error);
+    }
+  };
+
+
+
   if (phase === 'init') {
     return (
       <div className="container">
@@ -373,6 +449,17 @@ const startNextRound = async () => {
               ))}
             </ul>
           </div>
+          <div className="mb-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={hideNames}
+                onChange={(e) => setHideNames(e.target.checked)}
+                className="form-checkbox"
+              />
+              <span>Hide Student Names During Evaluation</span>
+            </label>
+          </div>
           <button onClick={startEvaluation} className="btn btn-primary">
             Start Round 1
           </button>
@@ -382,7 +469,7 @@ const startNextRound = async () => {
   }
 
   if (phase === 'evaluate') {
-    const totalPossibleEvaluations = submissions.length ;
+    const totalPossibleEvaluations = submissions.length;
 
     return (
       <div className="container mx-auto p-8">
@@ -398,6 +485,20 @@ const startNextRound = async () => {
               {totalPossibleEvaluations}
             </p>
           </div>
+          
+          <div className="mb-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={hideRankingNames}
+                onChange={(e) => setHideRankingNames(e.target.checked)}
+                className="form-checkbox"
+              />
+              <span>Hide Names in Rankings</span>
+            </label>
+          </div>
+
+
 
           {/* Current Rankings Table */}
           <div className="bg-white p-6 rounded-lg shadow">
@@ -424,7 +525,7 @@ const startNextRound = async () => {
                         {index + 1}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {submission.studentName}
+                       {hideRankingNames ? 'Anonymous' : submission.studentName} 
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {submission.score}
@@ -460,17 +561,46 @@ const startNextRound = async () => {
       <div className="container">
         <ResetButton />
         <div className="card">
-          <h1 className="text-2xl font-bold mb-6">Final Rankings</h1>
-          <ol className="space-y-3">
-            {rankings.map((submission, index) => (
-              <li key={submission.id} className="text-gray-700">
-                {`${index + 1}. ${submission.studentName} (Score: ${
-                  submission.score
-                })`}
-              </li>
-            ))}
-          </ol>
+        <h2 className="text-xl font-semibold mb-4">Current Rankings</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Rank
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Name
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Score
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {rankings.map((submission, index) => (
+                    <tr key={submission.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {index + 1}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                       {hideRankingNames ? 'Anonymous' : submission.studentName} 
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {submission.score}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
         </div>
+        <button
+          onClick={exportData}
+          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded mt-4"
+        >
+          Export Results
+        </button>
       </div>
     );
   }

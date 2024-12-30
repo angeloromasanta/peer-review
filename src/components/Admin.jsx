@@ -19,7 +19,7 @@ import {
   runEvaluationRound,
   resetEvaluationManager
 } from './evaluationManager';
-
+import { runSimulation } from './simulationTest';
 
 function Admin() {
   const [phase, setPhase] = useState('init');
@@ -241,6 +241,86 @@ function Admin() {
     }
   };
 
+  const SimulationButton = () => {
+    const [isSimulating, setIsSimulating] = useState(false);
+    const [simulationResults, setSimulationResults] = useState(null);
+  
+    const handleSimulation = async () => {
+      if (isSimulating) return;
+      
+      try {
+        setIsSimulating(true);
+        const results = await runSimulation();
+        setSimulationResults(results);
+        
+        // Print formatted results
+        console.log('\n=== Simulation Results ===');
+        results.rounds.forEach(round => {
+          console.log(`\nRound ${round.round}`);
+          console.log('Evaluator | Pair evaluated | Winner');
+          console.log('----------|----------------|--------');
+          round.evaluations.forEach(evaluation => {
+            const evaluatorId = evaluation.evaluator.match(/\d+/)[0].padStart(2, '0');
+            const pair1 = evaluation.pair[0].match(/\d+/)[0].padStart(2, '0');
+            const pair2 = evaluation.pair[1].match(/\d+/)[0].padStart(2, '0');
+            const winnerId = String(evaluation.winner).padStart(2, '0');
+            console.log(`   ${evaluatorId}    |   ${pair1} vs ${pair2}   |   ${winnerId}`);
+          });
+        });
+        
+      } catch (error) {
+        console.error('Simulation failed:', error);
+        alert('Simulation failed. Check console for details.');
+      } finally {
+        setIsSimulating(false);
+      }
+    };
+  
+    return (
+      <div className="fixed top-4 left-4 flex flex-col items-start space-y-4">
+        <button
+          onClick={handleSimulation}
+          disabled={isSimulating}
+          className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded shadow-md transition-colors duration-200"
+        >
+          {isSimulating ? 'Running Simulation...' : 'Run 30-Student Simulation'}
+        </button>
+        
+        {simulationResults && (
+          <div className="bg-white p-4 rounded shadow-md max-w-2xl max-h-96 overflow-auto">
+            <h3 className="font-bold mb-2">Simulation Results</h3>
+            {simulationResults.rounds.map((round) => (
+              <div key={round.round} className="mb-6">
+                <h4 className="font-semibold mb-2">Round {round.round}</h4>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-1">Evaluator</th>
+                      <th className="text-left py-1">Pair evaluated</th>
+                      <th className="text-left py-1">Winner</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {round.evaluations.map((evaluation, idx) => (
+                      <tr key={idx} className="border-b border-gray-100">
+                        <td className="py-1">{evaluation.evaluator.match(/\d+/)[0].padStart(2, '0')}</td>
+                        <td className="py-1">
+                          {evaluation.pair[0].match(/\d+/)[0].padStart(2, '0')} vs{' '}
+                          {evaluation.pair[1].match(/\d+/)[0].padStart(2, '0')}
+                        </td>
+                        <td className="py-1">{String(evaluation.winner).padStart(2, '0')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const startActivity = async () => {
     const activityRef = await addDoc(collection(db, 'activities'), {
       name: activityName,
@@ -445,6 +525,7 @@ function Admin() {
     return (
       <div className="container">
         <ResetButton />
+        <SimulationButton />
         <div className="card">
           <h1 className="text-2xl font-bold mb-6">Initialize Activity</h1>
           <input

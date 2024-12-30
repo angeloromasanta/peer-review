@@ -32,6 +32,9 @@ function Student() {
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
   const [textContent, setTextContent] = useState('');
 const [images, setImages] = useState([]);
+const [tempImageUrls, setTempImageUrls] = useState([]); // Temporary URLs for preview
+
+
   const [studentId, setStudentId] = useState(() =>
     localStorage.getItem('studentId') ? Number(localStorage.getItem('studentId')) : null
   );
@@ -114,7 +117,7 @@ useEffect(() => {
 }, [currentActivity?.currentRound]);
 
 
-const handlePaste = (e) => {
+const handlePaste = async (e) => {
   const items = e.clipboardData?.items;
   if (!items) return;
 
@@ -124,7 +127,21 @@ const handlePaste = (e) => {
       e.preventDefault();
       const file = item.getAsFile();
       if (file) {
-        setImages(prev => [...prev, file]); // Store the actual File object
+        try {
+          // Upload to Firebase Storage immediately
+          const storageRef = ref(storage, `temp/${studentEmail}/${Date.now()}-${file.name}`);
+          const snapshot = await uploadBytes(storageRef, file);
+          const downloadURL = await getDownloadURL(snapshot.ref);
+
+          // Add to temporary image URLs for preview
+          setTempImageUrls(prev => [...prev, downloadURL]);
+
+          // Append an image tag to textContent
+          setTextContent(prevContent => prevContent + `<img src="${downloadURL}" alt="Pasted Image" />`);
+        } catch (error) {
+          console.error('Error uploading image:', error);
+          alert('Failed to upload image. Please try again.');
+        }
       }
     }
   }
@@ -147,8 +164,8 @@ const handleSubmit = async (event) => {
 
   try {
     console.log('Handling submission with:', { studentName, studentEmail });
-    
-    // Check if already submitted this activity
+
+    // 1. Check if already submitted this activity
     const existingSubmissions = await getDocs(
       query(
         collection(db, 'submissions'),
@@ -156,7 +173,7 @@ const handleSubmit = async (event) => {
         where('studentEmail', '==', studentEmail)
       )
     );
-    
+
     if (!existingSubmissions.empty) {
       console.log('Already submitted for this activity');
       setSubmitted(true);
@@ -165,13 +182,13 @@ const handleSubmit = async (event) => {
       return;
     }
 
-    // Get or create student ID
+    // 2. Get or create student ID
     const studentQuery = query(
       collection(db, 'students'),
       where('email', '==', studentEmail)
     );
     const studentSnapshot = await getDocs(studentQuery);
-    
+
     let studentId;
     if (!studentSnapshot.empty) {
       studentId = studentSnapshot.docs[0].data().studentId;
@@ -184,62 +201,82 @@ const handleSubmit = async (event) => {
       );
       const allStudentsSnapshot = await getDocs(allStudentsQuery);
       studentId = (allStudentsSnapshot.empty ? 0 : allStudentsSnapshot.docs[0].data().studentId) + 1;
-      
+
       await addDoc(collection(db, 'students'), {
         email: studentEmail,
         studentId: studentId,
       });
     }
 
-    // Upload images to Firebase Storage and get their URLs
-    const imageUrls = await Promise.all(
-      images.map(async (imageFile, index) => {
-        const storageRef = ref(storage, `submissions/${currentActivity.id}/${studentId}/${Date.now()}-${index}`);
-        await uploadBytes(storageRef, imageFile);
-        return await getDownloadURL(storageRef);
-      })
-    );
+    // 3. Handle Temporary Image URLs
+    let finalContent = textContent;
+    for (const tempUrl of tempImageUrls) {
+      if (finalContent.includes(tempUrl)) {
+        // 3.a. Extract Filename (Optional)
+        // If you need the original filename, try to extract it from the temporary URL.
+        const filenameMatch = tempUrl.match(/\/([^/?]+)(?:\?|$)/);
+        const filename = filenameMatch ? filenameMatch[1] : Date.now(); // Use timestamp if no filename
 
-    // Prepare the submission content
-    const submissionContent = {
-      text: textContent.trim(),
-      imageUrls: imageUrls,
-      type: 'rich-content',
-      version: '1.0'
-    };
+        // 3.b. Fetch Image from Temporary URL
+        const response = await fetch(tempUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch image from temporary URL: ${tempUrl}`);
+        }
+        const blob = await response.blob();
 
-    // Validate content
-    if (!submissionContent.text && submissionContent.imageUrls.length === 0) {
-      throw new Error('Submission must include either text or images');
+        // 3.c. Upload to Permanent Location
+        const storageRef = ref(storage, `submissions/${currentActivity.id}/${studentId}/${filename}`);
+        await uploadBytes(storageRef, blob);
+        const permanentUrl = await getDownloadURL(storageRef);
+
+        // 3.d. Replace Temporary URL with Permanent URL
+        finalContent = finalContent.replace(tempUrl, permanentUrl);
+      }
     }
 
-    // Create submission document
+    // 4. Prepare the Submission Content
+    const submissionContent = {
+      // Now contains permanent URLs (if any)
+      content: finalContent,
+      type: 'rich-content', // You might want to adjust this based on your content
+      version: '1.0',
+    };
+
+    // 5. Validate Content (Optional)
+    // You can add more specific validation here if needed
+    if (!submissionContent.content.trim() && !submissionContent.content.includes('<img')) {
+      throw new Error('Submission must include either text or images.');
+    }
+
+    // 6. Create Submission Document
     await addDoc(collection(db, 'submissions'), {
       activityId: currentActivity.id,
       studentName,
       studentEmail,
       studentId,
-      content: submissionContent,
+      content: submissionContent.content, // Store the content with permanent URLs
       timestamp: new Date(),
       metadata: {
-        hasImages: imageUrls.length > 0,
-        imageCount: imageUrls.length,
-        textLength: textContent.trim().length,
-        submissionType: 'rich-content'
-      }
+        // You may need to adjust this based on your content analysis
+        hasImages: finalContent.includes('<img'),
+        imageCount: (finalContent.match(/<img/g) || []).length,
+        textLength: finalContent.replace(/<[^>]+>/g, '').trim().length, // Remove HTML tags to get text length
+        submissionType: 'rich-content',
+      },
     });
 
-    // Update local state
+    // 7. Update Local State
     setStudentId(studentId);
     setSubmitted(true);
 
-    // Clear form
+    // 8. Clear Form
     setTextContent('');
-    setImages([]);
-
+    setTempImageUrls([]);
   } catch (error) {
     console.error('Error submitting:', error);
-    alert('Error submitting your work. Please try again.');
+    alert(
+      'Error submitting your work. Please check the console for more details and try again.'
+    );
   }
 };
 
@@ -511,47 +548,44 @@ useEffect(() => {
           </div>
           <div>
           <div className="space-y-4">
-  <div 
-    className="border p-2 w-full min-h-32 bg-white"
-    contentEditable
-    onPaste={handlePaste}
-    onInput={(e) => setTextContent(e.currentTarget.textContent)}
-    placeholder="Paste or type your submission here"
-  />
-  
-  <input
-    type="file"
-    accept="image/*"
-    multiple
-    onChange={handleFileSelect}
-    className="block w-full text-sm text-gray-500
-      file:mr-4 file:py-2 file:px-4
-      file:rounded-full file:border-0
-      file:text-sm file:font-semibold
-      file:bg-blue-50 file:text-blue-700
-      hover:file:bg-blue-100"
-  />
-  
-  {images.length > 0 && (
-    <div className="grid grid-cols-2 gap-4">
-      {images.map((image, index) => (
-        <div key={index} className="relative">
-          <img 
-            src={URL.createObjectURL(image)} 
-            alt={`Upload preview ${index + 1}`} 
-            className="max-w-full h-auto"
-          />
-          <button
-            onClick={() => setImages(prev => prev.filter((_, i) => i !== index))}
-            className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6"
-          >
-            ×
-          </button>
-        </div>
-      ))}
-    </div>
-  )}
-</div>
+         
+            <div
+              className="border p-2 w-full min-h-32 bg-white"
+              contentEditable
+              suppressContentEditableWarning={true}
+              onPaste={handlePaste}
+              onInput={(e) => setTextContent(e.currentTarget.innerHTML)}
+              placeholder="Paste or type your submission here"
+              dangerouslySetInnerHTML={{ __html: textContent }}
+            />
+
+            {/* No need for file input anymore */}
+
+            {/* Image preview (using temporary URLs) */}
+            {tempImageUrls.length > 0 && (
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                {tempImageUrls.map((imageUrl, index) => (
+                  <div key={index} className="relative">
+                    <img
+                      src={imageUrl}
+                      alt={`Upload preview ${index + 1}`}
+                      className="max-w-full h-auto"
+                    />
+                    <button
+                      onClick={() => {
+                        setTempImageUrls(prev => prev.filter((_, i) => i !== index));
+                        // Also remove the image tag from textContent
+                        setTextContent(prevContent => prevContent.replace(`<img src="${imageUrl}" alt="Pasted Image" />`, ''));
+                      }}
+                      className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           </div>
           <button
             type="submit"

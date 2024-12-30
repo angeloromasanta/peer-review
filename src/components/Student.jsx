@@ -14,7 +14,7 @@ import {
   orderBy,
 } from 'firebase/firestore';
 import _ from 'lodash';
-
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { runEvaluationRound } from './evaluationManager';
 
 function Student() {
@@ -35,6 +35,18 @@ const [images, setImages] = useState([]);
   const [studentId, setStudentId] = useState(() =>
     localStorage.getItem('studentId') ? Number(localStorage.getItem('studentId')) : null
   );
+
+  const getSubmissionContent = () => {
+    return {
+      text: textContent,
+      images: images
+    };
+  };
+
+  const [contentState, setContentState] = useState({
+    text: '',
+    images: []
+  });
 
   // Persistence effect
   useEffect(() => {
@@ -102,10 +114,33 @@ useEffect(() => {
 }, [currentActivity?.currentRound]);
 
 
+const handlePaste = (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
 
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.type.indexOf('image') !== -1) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        setImages(prev => [...prev, file]); // Store the actual File object
+      }
+    }
+  }
+};
+
+const handleFileSelect = (e) => {
+  const files = Array.from(e.target.files || []);
+  const imageFiles = files.filter(file => file.type.startsWith('image/'));
+  setImages(prev => [...prev, ...imageFiles]);
+};
 
 
 // Handle submission
+const storage = getStorage();
+
+
 const handleSubmit = async (event) => {
   event.preventDefault();
   if (!currentActivity || submitted) return;
@@ -156,21 +191,58 @@ const handleSubmit = async (event) => {
       });
     }
 
+    // Upload images to Firebase Storage and get their URLs
+    const imageUrls = await Promise.all(
+      images.map(async (imageFile, index) => {
+        const storageRef = ref(storage, `submissions/${currentActivity.id}/${studentId}/${Date.now()}-${index}`);
+        await uploadBytes(storageRef, imageFile);
+        return await getDownloadURL(storageRef);
+      })
+    );
+
+    // Prepare the submission content
+    const submissionContent = {
+      text: textContent.trim(),
+      imageUrls: imageUrls,
+      type: 'rich-content',
+      version: '1.0'
+    };
+
+    // Validate content
+    if (!submissionContent.text && submissionContent.imageUrls.length === 0) {
+      throw new Error('Submission must include either text or images');
+    }
+
+    // Create submission document
     await addDoc(collection(db, 'submissions'), {
       activityId: currentActivity.id,
       studentName,
       studentEmail,
       studentId,
-      content: submission,
+      content: submissionContent,
       timestamp: new Date(),
+      metadata: {
+        hasImages: imageUrls.length > 0,
+        imageCount: imageUrls.length,
+        textLength: textContent.trim().length,
+        submissionType: 'rich-content'
+      }
     });
 
+    // Update local state
     setStudentId(studentId);
     setSubmitted(true);
+
+    // Clear form
+    setTextContent('');
+    setImages([]);
+
   } catch (error) {
     console.error('Error submitting:', error);
+    alert('Error submitting your work. Please try again.');
   }
 };
+
 
 const handleReset = () => {
   setPhase('wait');
@@ -438,13 +510,48 @@ useEffect(() => {
             />
           </div>
           <div>
-            <textarea
-              value={submission}
-              onChange={(e) => setSubmission(e.target.value)}
-              placeholder="Your Submission"
-              className="border p-2 w-full h-32"
-              required
-            />
+          <div className="space-y-4">
+  <div 
+    className="border p-2 w-full min-h-32 bg-white"
+    contentEditable
+    onPaste={handlePaste}
+    onInput={(e) => setTextContent(e.currentTarget.textContent)}
+    placeholder="Paste or type your submission here"
+  />
+  
+  <input
+    type="file"
+    accept="image/*"
+    multiple
+    onChange={handleFileSelect}
+    className="block w-full text-sm text-gray-500
+      file:mr-4 file:py-2 file:px-4
+      file:rounded-full file:border-0
+      file:text-sm file:font-semibold
+      file:bg-blue-50 file:text-blue-700
+      hover:file:bg-blue-100"
+  />
+  
+  {images.length > 0 && (
+    <div className="grid grid-cols-2 gap-4">
+      {images.map((image, index) => (
+        <div key={index} className="relative">
+          <img 
+            src={URL.createObjectURL(image)} 
+            alt={`Upload preview ${index + 1}`} 
+            className="max-w-full h-auto"
+          />
+          <button
+            onClick={() => setImages(prev => prev.filter((_, i) => i !== index))}
+            className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
           </div>
           <button
             type="submit"

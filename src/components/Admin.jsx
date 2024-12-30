@@ -30,6 +30,7 @@ function Admin() {
   const [rankings, setRankings] = useState([]);
   const [hideRankingNames, setHideRankingNames] = useState(false);
   const [hideNames, setHideNames] = useState(false);
+  const [pendingEvaluators, setPendingEvaluators] = useState([]);
   const [isResetting, setIsResetting] = useState(false);
 
   // In Admin.jsx, add initial activity fetch
@@ -113,6 +114,58 @@ function Admin() {
 
     return () => unsubscribe();
   }, [currentActivity]);
+
+
+  useEffect(() => {
+    const getPendingEvaluators = async () => {
+      if (!currentActivity || phase !== 'evaluate') {
+        setPendingEvaluators([]);
+        return;
+      }
+
+      try {
+        // Get all submissions for this activity
+        const submissionsSnapshot = await getDocs(
+          query(collection(db, 'submissions'),
+            where('activityId', '==', currentActivity.id))
+        );
+
+        // Get all evaluations for current round
+        const evaluationsSnapshot = await getDocs(
+          query(collection(db, 'evaluations'),
+            where('activityId', '==', currentActivity.id),
+            where('round', '==', currentActivity.currentRound))
+        );
+
+        // Create a map of evaluator email to number of evaluations completed
+        const evaluatorCounts = {};
+        evaluationsSnapshot.docs.forEach(doc => {
+          const evaluatorEmail = doc.data().evaluatorEmail;
+          evaluatorCounts[evaluatorEmail] = (evaluatorCounts[evaluatorEmail] || 0) + 1;
+        });
+
+        // Get all students who should evaluate
+        const allEvaluators = submissionsSnapshot.docs.map(doc => ({
+          name: doc.data().studentName,
+          email: doc.data().studentEmail,
+          evaluationsCompleted: evaluatorCounts[doc.data().studentEmail] || 0,
+          evaluationsRequired: submissionsSnapshot.docs.length - 1 // Everyone needs to evaluate all others except themselves
+        }));
+
+        // Filter for pending evaluators (those who haven't completed all required evaluations)
+        const pending = allEvaluators.filter(
+          evaluator => evaluator.evaluationsCompleted < evaluator.evaluationsRequired
+        );
+
+        setPendingEvaluators(pending);
+      } catch (error) {
+        console.error('Error getting pending evaluators:', error);
+      }
+    };
+
+    getPendingEvaluators();
+  }, [currentActivity, phase, evaluations, currentActivity?.currentRound]);
+
 
   useEffect(() => {
     if (!currentActivity) return;
@@ -202,14 +255,14 @@ function Admin() {
 
   const startEvaluation = async () => {
     if (!currentActivity) return;
-  
+
     try {
       console.log('Starting evaluation phase...');
-      
+
       // Run evaluation round and get assignments
       const evaluators = await runEvaluationRound(currentActivity.id);
       console.log('Evaluators assigned:', evaluators);
-  
+
       // Update activity document with phase, round, and assignments
       await updateDoc(doc(db, 'activities', currentActivity.id), {
         phase: 'evaluate',
@@ -217,13 +270,13 @@ function Admin() {
         hideNames: hideNames,
         evaluatorAssignments: evaluators // Store the assignments
       });
-  
+
       console.log('Updated activity with assignments:', {
         phase: 'evaluate',
         currentRound: 1,
         evaluatorAssignments: evaluators
       });
-  
+
       setPhase('evaluate');
     } catch (error) {
       console.error('Error starting evaluation:', error);
@@ -236,28 +289,28 @@ function Admin() {
       console.error('No current activity found');
       return;
     }
-  
+
     try {
       console.log('Starting next round...');
-      
+
       // Get the current activity data
       const activityDoc = await getDoc(doc(db, 'activities', currentActivity.id));
-      
+
       if (!activityDoc.exists()) {
         console.error('Activity document not found');
         return;
       }
-  
+
       const activityData = activityDoc.data();
       console.log('Current activity data:', activityData);
-      
+
       const currentRound = activityData.currentRound || 1;
       console.log('Current round:', currentRound);
-      
+
       // Run evaluation round and get new assignments
       const evaluators = await runEvaluationRound(currentActivity.id);
       console.log('New evaluator assignments:', evaluators);
-      
+
       // Update the activity with new round number and assignments
       const updateData = {
         currentRound: currentRound + 1,
@@ -265,10 +318,10 @@ function Admin() {
         evaluatorAssignments: evaluators,
         hideNames: hideNames,
       };
-  
+
       await updateDoc(doc(db, 'activities', currentActivity.id), updateData);
       console.log('Successfully updated activity with:', updateData);
-      
+
     } catch (error) {
       console.error('Error starting next round:', error);
     }
@@ -281,7 +334,7 @@ function Admin() {
       phase: 'final',
     });
     setPhase('final');
-    calculateFinalRankings();
+    calculateCurrentRankings();
   };
 
   const calculateCurrentRankings = async (currentEvaluations) => {
@@ -320,29 +373,6 @@ function Admin() {
     setRankings(sortedRankings);
   };
 
-  const calculateFinalRankings = async () => {
-    const evaluationsSnapshot = await getDocs(
-      query(
-        collection(db, 'evaluations'),
-        where('activityId', '==', currentActivity.id)
-      )
-    );
-
-    const scores = {};
-    evaluationsSnapshot.forEach((doc) => {
-      const evaluation = doc.data();
-      scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
-    });
-
-    const sortedRankings = Object.entries(scores)
-      .sort(([, a], [, b]) => b - a)
-      .map(([submissionId, score]) => ({
-        ...submissions.find((s) => s.id === submissionId),
-        score,
-      }));
-
-    setRankings(sortedRankings);
-  };
 
   // Reset button that's always present
   const ResetButton = () => (
@@ -479,13 +509,23 @@ function Admin() {
 
           {/* Progress section */}
           <div className="bg-white p-6 rounded-lg shadow">
-            <h2 className="text-xl font-semibold mb-4">Progress</h2>
-            <p className="text-lg">
-              Completed evaluations: {evaluations.length} /{' '}
-              {totalPossibleEvaluations}
-            </p>
-          </div>
-          
+  <h2 className="text-xl font-semibold mb-4">Progress</h2>
+  <p className="text-lg mb-2">
+    Completed evaluations: {evaluations.length} / {submissions.length * (submissions.length - 1)}
+  </p>
+  {submissions.length > 0 && (
+    <>
+      {pendingEvaluators.length > 0 ? (
+        <p className="text-red-600">
+          Pending: {pendingEvaluators.map(e => e.name).join(' ')}
+        </p>
+      ) : (
+        <p className="text-green-600">All evaluations completed!</p>
+      )}
+    </>
+  )}
+</div>
+
           <div className="mb-4">
             <label className="flex items-center space-x-2">
               <input
@@ -525,7 +565,7 @@ function Admin() {
                         {index + 1}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                       {hideRankingNames ? 'Anonymous' : submission.studentName} 
+                        {hideRankingNames ? 'Anonymous' : submission.studentName}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {submission.score}
@@ -561,39 +601,39 @@ function Admin() {
       <div className="container">
         <ResetButton />
         <div className="card">
-        <h2 className="text-xl font-semibold mb-4">Current Rankings</h2>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Rank
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Score
-                    </th>
+          <h2 className="text-xl font-semibold mb-4">Final Rankings</h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Rank
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Name
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Score
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {rankings.map((submission, index) => (
+                  <tr key={submission.id}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {index + 1}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {hideRankingNames ? 'Anonymous' : submission.studentName}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {submission.score}
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {rankings.map((submission, index) => (
-                    <tr key={submission.id}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {index + 1}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                       {hideRankingNames ? 'Anonymous' : submission.studentName} 
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {submission.score}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
         <button
           onClick={exportData}

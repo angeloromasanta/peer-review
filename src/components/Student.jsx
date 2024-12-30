@@ -30,6 +30,8 @@ function Student() {
   const [submitted, setSubmitted] = useState(false);
   const [evaluationSubmitted, setEvaluationSubmitted] = useState(false);
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
+  const [textContent, setTextContent] = useState('');
+const [images, setImages] = useState([]);
   const [studentId, setStudentId] = useState(() =>
     localStorage.getItem('studentId') ? Number(localStorage.getItem('studentId')) : null
   );
@@ -98,6 +100,10 @@ useEffect(() => {
 
   return () => unsubscribe();
 }, [currentActivity?.currentRound]);
+
+
+
+
 
 // Handle submission
 const handleSubmit = async (event) => {

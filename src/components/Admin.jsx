@@ -1,3 +1,4 @@
+//admin.jsx
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import {
@@ -397,35 +398,47 @@ function Admin() {
   // Utility Functions
   const calculateCurrentRankings = async (currentEvaluations) => {
     if (!selectedActivity?.id) return;
-
+  
     const scores = {};
-
+    const starCounts = {};
+  
     const submissionsSnapshot = await getDocs(
       query(
         collection(db, 'submissions'),
         where('activityId', '==', selectedActivity.id)
       )
     );
+    
     const currentSubmissions = submissionsSnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
     }));
-
+  
+    // Initialize scores and star counts
     currentSubmissions.forEach((submission) => {
       scores[submission.id] = 0;
+      starCounts[submission.studentEmail] = 0;
     });
-
+  
+    // Calculate submission scores
     currentEvaluations.forEach((evaluation) => {
       scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
+      
+      // Count stars received for comments
+      if (evaluation.stars?.length > 0) {
+        starCounts[evaluation.evaluatorEmail] = 
+          (starCounts[evaluation.evaluatorEmail] || 0) + evaluation.stars.length;
+      }
     });
-
+  
     const sortedRankings = currentSubmissions
       .map((submission) => ({
         ...submission,
         score: scores[submission.id] || 0,
+        starsReceived: starCounts[submission.studentEmail] || 0
       }))
       .sort((a, b) => b.score - a.score);
-
+  
     setRankings(sortedRankings);
   };
 
@@ -486,14 +499,16 @@ function Admin() {
       };
 
       const csvContent = [
-        ['Student Name', 'Email', 'Submission', 'Points', 'Comments Received'].join(','),
+        ['Student Name', 'Email', 'Submission', 'Points', 'Stars Received', 'Comments Received'].join(','),
         ...submissions.map(sub => {
           const formattedComments = formatComments(sub.id);
+          const rankingData = rankings.find(r => r.id === sub.id);
           return [
             sub.studentName,
             sub.studentEmail,
             `"${sub.content?.content ? sub.content.content.replace(/"/g, '""') : sub.content?.replace(/"/g, '""')}"`,
-            rankings.find(r => r.id === sub.id)?.score || 0,
+            rankingData?.score || 0,
+            rankingData?.starsReceived || 0,
             `"${formattedComments.replace(/"/g, '""')}"`
           ].join(',');
         })
@@ -824,35 +839,41 @@ function Admin() {
 
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Rank
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Score
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {rankings.map((submission, index) => (
-                  <tr key={submission.id}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {index + 1}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {hideRankingNames ? 'Anonymous' : submission.studentName}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {submission.score}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+  <thead className="bg-gray-50">
+    <tr>
+      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+        Rank
+      </th>
+      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+        Name
+      </th>
+      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+        Score
+      </th>
+      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+        Stars Received
+      </th>
+    </tr>
+  </thead>
+  <tbody className="bg-white divide-y divide-gray-200">
+    {rankings.map((submission, index) => (
+      <tr key={submission.id}>
+        <td className="px-6 py-4 whitespace-nowrap">
+          {index + 1}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap">
+          {hideRankingNames ? 'Anonymous' : submission.studentName}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap">
+          {submission.score}
+        </td>
+        <td className="px-6 py-4 whitespace-nowrap">
+          {submission.starsReceived} ★
+        </td>
+      </tr>
+    ))}
+  </tbody>
+</table>
           </div>
         </div>
       </div>

@@ -35,6 +35,7 @@ function Student() {
   const [evaluationSubmitted, setEvaluationSubmitted] = useState(false);
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
   const [textContent, setTextContent] = useState('');
+  
 const [images, setImages] = useState([]);
 const [tempImageUrls, setTempImageUrls] = useState([]); // Temporary URLs for preview
 
@@ -68,55 +69,50 @@ const storage = getStorage();
   // In Student.jsx, update the useEffect that monitors activities
  // Activity monitoring effect
 // Activity monitoring effect
+// Replace the existing activity monitoring useEffect with this:
 useEffect(() => {
-  const unsubscribe = onSnapshot(
-    query(
-      collection(db, 'activities'),
-      orderBy('currentRound', 'desc'),
-      limit(1)
-    ),
-    (snapshot) => {
-      if (snapshot.empty) {
-        // No activities exist - likely due to reset
-        console.log('No activities found - resetting state');
-        setPhase('wait');
-        setCurrentActivity(null);
-        setStudentName('');
-        setStudentEmail('');
-        setSubmission('');
-        setEvaluationPair(null);
-        setLeftComments('');
-        setRightComments('');
-        setSubmitted(false);
-        setEvaluationSubmitted(false);
-        setReceivedEvaluations([]);
-        setStudentId(null);
-        localStorage.clear();
-        return;
-      }
-
-      const activity = {
-        id: snapshot.docs[0].id,
-        ...snapshot.docs[0].data(),
-      };
-      console.log('Activity updated:', activity);
-
-      setCurrentActivity(activity);
-      setPhase(activity.phase);
-
-      // Reset evaluation state when round changes
-      if (activity.currentRound !== currentActivity?.currentRound) {
-        console.log('Round changed from', currentActivity?.currentRound, 'to', activity.currentRound);
-        setEvaluationSubmitted(false);
-        setEvaluationPair(null);
-        setLeftComments('');
-        setRightComments('');
-      }
-    },
-    (error) => {
-      console.error('Error monitoring activities:', error);
-    }
+  const q = query(
+    collection(db, 'activities'),
+    where('isActive', '==', true)
   );
+
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    if (snapshot.empty) {
+      console.log('No active activity found - resetting state');
+      setPhase('wait');
+      setCurrentActivity(null);
+      setStudentName('');
+      setStudentEmail('');
+      setSubmission('');
+      setEvaluationPair(null);
+      setLeftComments('');
+      setRightComments('');
+      setSubmitted(false);
+      setEvaluationSubmitted(false);
+      setReceivedEvaluations([]);
+      setStudentId(null);
+      localStorage.clear();
+      return;
+    }
+
+    const activity = {
+      id: snapshot.docs[0].id,
+      ...snapshot.docs[0].data(),
+    };
+    console.log('Active activity updated:', activity);
+
+    setCurrentActivity(activity);
+    setPhase(activity.phase);
+
+    // Reset evaluation state when round changes
+    if (activity.currentRound !== currentActivity?.currentRound) {
+      console.log('Round changed from', currentActivity?.currentRound, 'to', activity.currentRound);
+      setEvaluationSubmitted(false);
+      setEvaluationPair(null);
+      setLeftComments('');
+      setRightComments('');
+    }
+  });
 
   return () => unsubscribe();
 }, [currentActivity?.currentRound]);

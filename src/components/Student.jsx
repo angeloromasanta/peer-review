@@ -35,7 +35,9 @@ function Student() {
   const [evaluationSubmitted, setEvaluationSubmitted] = useState(false);
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
   const [textContent, setTextContent] = useState('');
-  
+  const [feedbackGiven, setFeedbackGiven] = useState([]);
+const [reactionCounts, setReactionCounts] = useState({ thumbsUp: 0, thumbsDown: 0 });
+
 const [images, setImages] = useState([]);
 const [tempImageUrls, setTempImageUrls] = useState([]); // Temporary URLs for preview
 
@@ -116,6 +118,83 @@ useEffect(() => {
 
   return () => unsubscribe();
 }, [currentActivity?.currentRound]);
+
+useEffect(() => {
+  if (!currentActivity || phase !== 'final' || !studentEmail) return;
+
+  const q = query(
+    collection(db, 'evaluations'),
+    where('evaluatorEmail', '==', studentEmail),
+    where('activityId', '==', currentActivity.id)
+  );
+
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    const evaluations = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      reactions: doc.data().reactions || { thumbsUp: [], thumbsDown: [] }
+    }));
+    
+    setFeedbackGiven(evaluations);
+    
+    const totals = evaluations.reduce((acc, evaluation) => ({
+      thumbsUp: acc.thumbsUp + (evaluation.reactions?.thumbsUp?.length || 0),
+      thumbsDown: acc.thumbsDown + (evaluation.reactions?.thumbsDown?.length || 0)
+    }), { thumbsUp: 0, thumbsDown: 0 });
+    
+    
+    setReactionCounts(totals);
+  });
+
+  return () => unsubscribe();
+}, [currentActivity, phase, studentEmail]);
+
+
+const handleReaction = async (evaluationId, reactionType, currentReactions = {}) => {
+  console.log('Reaction triggered:', {
+    evaluationId,
+    reactionType,
+    currentReactions,
+    studentEmail
+  });
+
+  // Ensure reactions exist with default empty arrays
+  const existingReactions = {
+    thumbsUp: currentReactions?.thumbsUp || [],
+    thumbsDown: currentReactions?.thumbsDown || []
+  };
+
+  console.log('Existing reactions:', existingReactions);
+
+  const evaluationRef = doc(db, 'evaluations', evaluationId);
+  
+  const userExists = existingReactions[reactionType].includes(studentEmail);
+  console.log('User exists in reaction:', userExists);
+  
+  // Remove user from both arrays first
+  const updatedReactions = {
+    thumbsUp: existingReactions.thumbsUp.filter(email => email !== studentEmail),
+    thumbsDown: existingReactions.thumbsDown.filter(email => email !== studentEmail)
+  };
+
+  console.log('Updated reactions before adding new:', updatedReactions);
+  
+  // Add user to selected reaction if they hadn't reacted this way before
+  if (!userExists) {
+    updatedReactions[reactionType] = [...updatedReactions[reactionType], studentEmail];
+  }
+
+  console.log('Final updated reactions:', updatedReactions);
+  
+  try {
+    await updateDoc(evaluationRef, {
+      reactions: updatedReactions
+    });
+    console.log('Update successful');
+  } catch (error) {
+    console.error('Error updating reaction:', error);
+  }
+};
 
 
 
@@ -677,12 +756,15 @@ useEffect(() => {
         
         return {
           evaluatorEmail: data.evaluatorEmail,
+          evaluationId: doc.id,
           comments,
           timestamp: data.timestamp,
           round: data.round,
-          won
+          won,
+          reactions: data.reactions || { thumbsUp: [], thumbsDown: [] } // Add this line
         };
       });
+      
 
       // Remove any duplicate evaluations (in case a submission appears in both queries)
       const uniqueEvaluations = _.uniqBy(processedEvaluations, 
@@ -937,22 +1019,64 @@ useEffect(() => {
         <div className="space-y-4">
           <h2 className="text-xl font-semibold">Comments received:</h2>
           {receivedEvaluations.length > 0 ? (
-            <div className="space-y-4">
-              {receivedEvaluations.map((evaluation, index) => (
-                <div key={index} className="bg-white shadow rounded-lg p-4">
-                  <div className="text-sm text-gray-500 mb-2">
-                    Round {evaluation.round}
-                  </div>
-                  <p className="text-gray-700">
-                    {evaluation.comments || "No comments provided"}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500">No evaluations received yet.</p>
-          )}
+          <div className="space-y-4">
+            {receivedEvaluations.map((evaluation, index) => (
+  <div key={index} className="bg-white shadow rounded-lg p-4">
+    <div className="text-sm text-gray-500 mb-2">
+      Round {evaluation.round}
+    </div>
+    <p className="text-gray-700">
+      {evaluation.comments || "No comments provided"}
+    </p>
+    <div className="mt-2 flex gap-2">
+      <button
+        onClick={() => handleReaction(
+          evaluation.evaluationId, // This was missing
+          'thumbsUp',
+          evaluation.reactions || {}
+        )}
+        className={`p-2 rounded ${
+          evaluation.reactions?.thumbsUp?.includes(studentEmail)
+            ? 'bg-blue-100'
+            : 'bg-gray-100'
+        }`}
+      >
+        👍
+      </button>
+      <button
+        onClick={() => handleReaction(
+          evaluation.evaluationId, // This was missing
+          'thumbsDown',
+          evaluation.reactions || {}
+        )}
+        className={`p-2 rounded ${
+          evaluation.reactions?.thumbsDown?.includes(studentEmail)
+            ? 'bg-blue-100'
+            : 'bg-gray-100'
+        }`}
+      >
+        👎
+      </button>
+    </div>
+  </div>
+))}
+
+          </div>
+        ) : (
+          <p className="text-gray-500">No evaluations received yet.</p>
+        )}
         </div>
+        <div className="mb-8">
+        <h2 className="text-xl font-semibold mb-4">Your Impact</h2>
+        <div className="bg-white shadow rounded-lg p-4">
+          <p>Reactions received on your feedback:</p>
+          <div className="flex gap-4 mt-2">
+            <div>👍 {reactionCounts.thumbsUp}</div>
+            <div>👎 {reactionCounts.thumbsDown}</div>
+          </div>
+        </div>
+      </div>
+
       </div>
     );
   }

@@ -144,35 +144,59 @@ function Student() {
       studentEmail
     });
   
-    const evaluationRef = doc(db, 'evaluations', evaluationId);
-  
-    const hasStarred = currentStars.includes(studentEmail);
-  
-    const updatedStars = hasStarred
-      ? currentStars.filter(email => email !== studentEmail)
-      : [...currentStars, studentEmail];
-  
     try {
+      // Get the current evaluation document to ensure we have latest stars
+      const evaluationRef = doc(db, 'evaluations', evaluationId);
+      const evaluationDoc = await getDoc(evaluationRef);
+      
+      if (!evaluationDoc.exists()) {
+        console.error('Evaluation not found');
+        return;
+      }
+  
+      // Get current stars from the document
+      const existingStars = evaluationDoc.data().stars || [];
+      
+      // Check if user has already starred
+      const hasStarred = existingStars.includes(studentEmail);
+  
+      // Add or remove the star while preserving other stars
+      let updatedStars;
+      if (hasStarred) {
+        updatedStars = existingStars.filter(email => email !== studentEmail);
+      } else {
+        updatedStars = [...existingStars, studentEmail];
+      }
+  
+      console.log('Updating stars:', {
+        existingStars,
+        updatedStars,
+        hasStarred
+      });
+  
       // Update Firestore
       await updateDoc(evaluationRef, {
         stars: updatedStars
       });
   
-      console.log('Star update successful');
-  
       // Update local state
       setReceivedEvaluations(prevEvaluations =>
         prevEvaluations.map(evaluation =>
           evaluation.evaluationId === evaluationId
-            ? { ...evaluation, stars: updatedStars } // Update the stars array
+            ? { ...evaluation, stars: updatedStars }
             : evaluation
         )
       );
+      
+      console.log('Star update successful', {
+        evaluationId,
+        updatedStars
+      });
+      
     } catch (error) {
       console.error('Error updating star:', error);
     }
   };
-
 
 
   const handlePaste = async (e) => {

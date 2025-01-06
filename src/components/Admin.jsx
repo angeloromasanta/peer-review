@@ -399,6 +399,8 @@ function Admin() {
   const calculateCurrentRankings = async (currentEvaluations) => {
     if (!selectedActivity?.id) return;
   
+    console.log('Starting calculateCurrentRankings with evaluations:', currentEvaluations);
+
     const scores = {};
     const starCounts = {};
   
@@ -413,43 +415,86 @@ function Admin() {
       id: doc.id,
       ...doc.data(),
     }));
+    
+    console.log('Current submissions:', currentSubmissions);
   
     // Initialize scores and star counts
     currentSubmissions.forEach((submission) => {
       scores[submission.id] = 0;
-      starCounts[submission.id] = 0; // Track stars per submission
+      starCounts[submission.id] = 0;
     });
   
-    // Calculate submission scores and stars
+    // First, let's log what evaluations have stars
+    currentEvaluations.forEach((evaluation, index) => {
+      console.log(`Evaluation ${index}:`, {
+        evaluatorEmail: evaluation.evaluatorEmail,
+        stars: evaluation.stars,
+        starsLength: evaluation?.stars?.length
+      });
+    });
+
+    // Create a map of evaluator emails to their submission IDs
+    const evaluatorToSubmissionMap = {};
+    currentSubmissions.forEach(sub => {
+      evaluatorToSubmissionMap[sub.studentEmail] = sub.id;
+    });
+    
+    console.log('Evaluator to submission map:', evaluatorToSubmissionMap);
+
+    // Now process evaluations
     currentEvaluations.forEach((evaluation) => {
-      // Update scores
+      // Update winner scores
       scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
-  
-      // Update stars for the submission that received the comments
-      if (evaluation.stars?.length > 0) {
-        // Determine which submission received the comments
-        const submissionId = evaluation.winner === evaluation.leftSubmissionId
-          ? evaluation.leftSubmissionId
-          : evaluation.rightSubmissionId;
-  
-        if (submissionId) {
-          starCounts[submissionId] =
-            (starCounts[submissionId] || 0) + evaluation.stars.length;
+      
+      // If this evaluation has stars, credit goes to the evaluator
+      if (evaluation.stars && Array.isArray(evaluation.stars)) {
+        const evaluatorSubmissionId = evaluatorToSubmissionMap[evaluation.evaluatorEmail];
+        
+        if (evaluatorSubmissionId) {
+          // Add each star individually to ensure proper counting
+          evaluation.stars.forEach(starFromEmail => {
+            starCounts[evaluatorSubmissionId] += 1;
+            
+            console.log('Adding star:', {
+              evaluatorEmail: evaluation.evaluatorEmail,
+              evaluatorSubmissionId,
+              starFromEmail,
+              newTotal: starCounts[evaluatorSubmissionId],
+              allStars: evaluation.stars
+            });
+          });
         }
       }
     });
   
-    // Sort rankings by score
+    console.log('Final scores and star counts:', {
+      scores,
+      starCounts
+    });
+
+    // Create rankings
     const sortedRankings = currentSubmissions
-      .map((submission) => ({
-        ...submission,
-        score: scores[submission.id] || 0,
-        starsReceived: starCounts[submission.id] || 0, // Add starsReceived to rankings
-      }))
+      .map((submission) => {
+        const ranking = {
+          ...submission,
+          score: scores[submission.id] || 0,
+          starsReceived: starCounts[submission.id] || 0
+        };
+
+        console.log('Created ranking for submission:', {
+          studentEmail: submission.studentEmail,
+          score: ranking.score,
+          starsReceived: ranking.starsReceived
+        });
+
+        return ranking;
+      })
       .sort((a, b) => b.score - a.score);
   
+    console.log('Final sorted rankings:', sortedRankings);
+    
     setRankings(sortedRankings);
-  };
+};
 
   const exportData = async () => {
     if (!selectedActivity?.id || isExporting) return;

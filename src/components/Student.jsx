@@ -143,20 +143,31 @@ function Student() {
       currentStars,
       studentEmail
     });
-
+  
     const evaluationRef = doc(db, 'evaluations', evaluationId);
-
+  
     const hasStarred = currentStars.includes(studentEmail);
-
+  
     const updatedStars = hasStarred
       ? currentStars.filter(email => email !== studentEmail)
       : [...currentStars, studentEmail];
-
+  
     try {
+      // Update Firestore
       await updateDoc(evaluationRef, {
         stars: updatedStars
       });
+  
       console.log('Star update successful');
+  
+      // Update local state
+      setReceivedEvaluations(prevEvaluations =>
+        prevEvaluations.map(evaluation =>
+          evaluation.evaluationId === evaluationId
+            ? { ...evaluation, stars: updatedStars } // Update the stars array
+            : evaluation
+        )
+      );
     } catch (error) {
       console.error('Error updating star:', error);
     }

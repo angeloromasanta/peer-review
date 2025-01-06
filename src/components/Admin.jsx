@@ -408,7 +408,7 @@ function Admin() {
         where('activityId', '==', selectedActivity.id)
       )
     );
-    
+  
     const currentSubmissions = submissionsSnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
@@ -417,25 +417,34 @@ function Admin() {
     // Initialize scores and star counts
     currentSubmissions.forEach((submission) => {
       scores[submission.id] = 0;
-      starCounts[submission.studentEmail] = 0;
+      starCounts[submission.id] = 0; // Track stars per submission
     });
   
-    // Calculate submission scores
+    // Calculate submission scores and stars
     currentEvaluations.forEach((evaluation) => {
+      // Update scores
       scores[evaluation.winner] = (scores[evaluation.winner] || 0) + 1;
-      
-      // Count stars received for comments
+  
+      // Update stars for the submission that received the comments
       if (evaluation.stars?.length > 0) {
-        starCounts[evaluation.evaluatorEmail] = 
-          (starCounts[evaluation.evaluatorEmail] || 0) + evaluation.stars.length;
+        // Determine which submission received the comments
+        const submissionId = evaluation.winner === evaluation.leftSubmissionId
+          ? evaluation.leftSubmissionId
+          : evaluation.rightSubmissionId;
+  
+        if (submissionId) {
+          starCounts[submissionId] =
+            (starCounts[submissionId] || 0) + evaluation.stars.length;
+        }
       }
     });
   
+    // Sort rankings by score
     const sortedRankings = currentSubmissions
       .map((submission) => ({
         ...submission,
         score: scores[submission.id] || 0,
-        starsReceived: starCounts[submission.studentEmail] || 0
+        starsReceived: starCounts[submission.id] || 0, // Add starsReceived to rankings
       }))
       .sort((a, b) => b.score - a.score);
   

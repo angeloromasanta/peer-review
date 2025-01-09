@@ -226,75 +226,22 @@ useEffect(() => {
 
 
   const handlePaste = async (e) => {
-    console.log('Paste event triggered');
     const items = e.clipboardData?.items;
-
-    if (!items) {
-      console.log('No clipboard items found');
-      return;
-    }
-
-    // Log all clipboard items
-    console.log('All clipboard items:', Array.from(items).map(item => ({
-      kind: item.kind,
-      type: item.type
-    })));
-
-    // First check for direct image paste
+    if (!items) return;
+  
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (item.type.indexOf('image') !== -1) {
-        console.log('Found direct image paste');
-        await handleDirectImagePaste(item);
-        return;
+        const file = item.getAsFile();
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = reader.result;
+          const imgPlaceholder = `<img src="${base64String}" class="max-w-full h-auto my-2" alt="Pasted image" />`;
+          setTextContent(prev => prev + imgPlaceholder);
+        };
+        reader.readAsDataURL(file);
+        break;
       }
-    }
-
-    // If no direct image, check for HTML content
-    const htmlItem = Array.from(items).find(item => item.type === 'text/html');
-    if (htmlItem) {
-      console.log('Found HTML content, checking for image');
-      htmlItem.getAsString(async (htmlString) => {
-        console.log('HTML content:', htmlString);
-
-        // Create a temporary element to parse the HTML
-        const temp = document.createElement('div');
-        temp.innerHTML = htmlString;
-
-        // Find all img elements in the pasted HTML
-        const images = temp.getElementsByTagName('img');
-        console.log('Found images in HTML:', images.length);
-
-        if (images.length > 0) {
-          // Prevent default paste for images
-          e.preventDefault();
-
-          for (const img of images) {
-            const imgSrc = img.src;
-            console.log('Processing image with src:', imgSrc);
-
-            try {
-              // Fetch the image
-              const response = await fetch(imgSrc);
-              console.log('Fetch response:', response.status);
-              if (!response.ok) throw new Error('Failed to fetch image');
-
-              const blob = await response.blob();
-              console.log('Got blob:', blob.type, blob.size);
-
-              // Create a file from the blob
-              const file = new File([blob], `pasted-image-${Date.now()}.png`, {
-                type: blob.type || 'image/png'
-              });
-
-              // Upload to Firebase
-              await handleImageFile(file);
-            } catch (error) {
-              console.error('Error processing HTML image:', error);
-            }
-          }
-        }
-      });
     }
   };
 
@@ -316,82 +263,27 @@ useEffect(() => {
 
   const handleImageFile = async (file) => {
     try {
-      // Generate a preview using FileReader
+      // Convert file to base64
       const reader = new FileReader();
       reader.onload = async (event) => {
-        console.log('FileReader loaded');
         const base64data = event.target.result;
-        console.log('Generated base64 data of length:', base64data.length);
-
-        const pasteId = Date.now();
-
-        // Create placeholder with base64 preview
+        
+        // Add directly to images state
+        setImages(prev => [...prev, base64data]);
+        
+        // Update content to show image
         const imgPlaceholder = `<img 
-        src="${base64data}" 
-        id="paste-${pasteId}"
-        class="max-w-full h-auto my-2 opacity-50 transition-opacity" 
-        alt="Uploading..." 
-      />`;
-
-        // Insert the placeholder
+          src="${base64data}" 
+          class="max-w-full h-auto my-2" 
+          alt="Uploaded image" 
+        />`;
+        
         setTextContent(prev => prev + imgPlaceholder);
-
-        try {
-          // Upload to Firebase
-          console.log('Starting Firebase upload');
-          const filename = `paste-${pasteId}.png`;
-          const storageRef = ref(storage, `temp/${studentEmail}/${filename}`);
-
-          const metadata = {
-            contentType: file.type || 'image/png',
-            customMetadata: {
-              uploadedBy: studentEmail
-            }
-          };
-
-          const snapshot = await uploadBytes(storageRef, file, metadata);
-          console.log('Upload completed:', snapshot);
-
-          const firebaseUrl = await getDownloadURL(snapshot.ref);
-          console.log('Got Firebase URL:', firebaseUrl);
-
-          // Track the URL
-          setTempImageUrls(prev => [...prev, firebaseUrl]);
-
-          // Update the image source
-          const imgElement = document.getElementById(`paste-${pasteId}`);
-          if (imgElement) {
-            imgElement.src = firebaseUrl;
-            imgElement.classList.remove('opacity-50');
-            // Update content state
-            const editableDiv = document.querySelector('[contenteditable]');
-            if (editableDiv) {
-              setTextContent(editableDiv.innerHTML);
-            }
-          }
-        } catch (error) {
-          console.error('Firebase upload error:', error);
-          const imgElement = document.getElementById(`paste-${pasteId}`);
-          if (imgElement) {
-            imgElement.remove();
-            const editableDiv = document.querySelector('[contenteditable]');
-            if (editableDiv) {
-              setTextContent(editableDiv.innerHTML);
-            }
-          }
-          alert('Failed to upload image. Please try again.');
-        }
       };
-
-      reader.onerror = (error) => {
-        console.error('FileReader error:', error);
-      };
-
-      console.log('Starting FileReader');
+  
       reader.readAsDataURL(file);
-
     } catch (error) {
-      console.error('Top level error in handleImageFile:', error);
+      console.error('Error handling image:', error);
       alert('Failed to process image. Please try again.');
     }
   };
@@ -423,181 +315,136 @@ useEffect(() => {
   // Handle submission
 
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!currentActivity || submitted) return;
+ // Replace the handleSubmit function with this version:
 
-    try {
-      console.log('Starting submission process:', { studentName, studentEmail });
+const handleSubmit = async (event) => {
+  event.preventDefault();
+  if (!currentActivity || submitted) return;
 
-      // 1. Validate input
-      if (!studentName.trim() || !studentEmail.trim() || !textContent.trim()) {
-        throw new Error('Please fill in all required fields');
-      }
-
-      // 2. Check for existing submissions
-      const existingSubmissions = await getDocs(
-        query(
-          collection(db, 'submissions'),
-          where('activityId', '==', currentActivity.id),
-          where('studentEmail', '==', studentEmail)
-        )
-      );
-
-      if (!existingSubmissions.empty) {
-        console.log('Already submitted for this activity');
-        setSubmitted(true);
-        const submission = existingSubmissions.docs[0].data();
-        setStudentId(submission.studentId);
-        return;
-      }
-
-      // 3. Get or create student ID
-      let studentId;
-      const studentQuery = query(
-        collection(db, 'students'),
-        where('email', '==', studentEmail)
-      );
-      const studentSnapshot = await getDocs(studentQuery);
-
-      if (!studentSnapshot.empty) {
-        studentId = studentSnapshot.docs[0].data().studentId;
-      } else {
-        // Create new student ID
-        const allStudentsQuery = query(
-          collection(db, 'students'),
-          orderBy('studentId', 'desc'),
-          limit(1)
-        );
-        const allStudentsSnapshot = await getDocs(allStudentsQuery);
-        studentId = (allStudentsSnapshot.empty ? 0 : allStudentsSnapshot.docs[0].data().studentId) + 1;
-
-        await addDoc(collection(db, 'students'), {
-          email: studentEmail,
-          name: studentName,
-          studentId: studentId,
-          createdAt: new Date()
-        });
-      }
-
-      // 4. Process content and handle images
-      let finalContent = textContent;
-      const imageUrls = new Set();
-      const failedImages = new Set();
-
-      // Extract all image URLs from content
-      const imgRegex = /<img[^>]+src="([^"]+)"[^>]*>/g;
-      let match;
-      while ((match = imgRegex.exec(finalContent)) !== null) {
-        imageUrls.add(match[1]);
-      }
-
-      // Process each image
-      for (const imageUrl of imageUrls) {
-        try {
-          if (imageUrl.includes('/temp/')) {  // Only process temporary images
-            // 4a. Extract filename and generate new path
-            const filename = imageUrl.split('/').pop().split('?')[0];
-            const permanentPath = `submissions/${currentActivity.id}/${studentId}/${filename}`;
-
-            // 4b. Fetch image from temporary URL
-            const response = await fetch(imageUrl);
-            if (!response.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
-            const blob = await response.blob();
-
-            // 4c. Upload to permanent location
-            const permanentRef = ref(storage, permanentPath);
-            const metadata = {
-              contentType: blob.type,
-              customMetadata: {
-                originalUrl: imageUrl,
-                submissionId: `${currentActivity.id}_${studentId}`,
-                uploadedAt: new Date().toISOString()
-              }
-            };
-
-            await uploadBytes(permanentRef, blob, metadata);
-            const permanentUrl = await getDownloadURL(permanentRef);
-
-            // 4d. Replace URL in content
-            finalContent = finalContent.replace(
-              new RegExp(imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
-              permanentUrl
-            );
-
-            // 4e. Clean up temporary file
-            try {
-              const tempRef = ref(storage, imageUrl.split('.com/o/')[1].split('?')[0]);
-              await deleteObject(tempRef);
-            } catch (cleanupError) {
-              console.warn('Failed to cleanup temp file:', cleanupError);
-              // Continue despite cleanup failure
-            }
-          }
-        } catch (imageError) {
-          console.error('Failed to process image:', imageError);
-          failedImages.add(imageUrl);
-        }
-      }
-
-      // 5. Check for failed images
-      if (failedImages.size > 0) {
-        throw new Error(`Failed to process ${failedImages.size} images. Please try again.`);
-      }
-
-      // 6. Prepare submission content
-      const submissionContent = {
-        content: finalContent,
-        type: 'rich-content',
-        version: '1.0',
-        metadata: {
-          hasImages: imageUrls.size > 0,
-          imageCount: imageUrls.size,
-          textLength: finalContent.replace(/<[^>]+>/g, '').trim().length,
-          lastModified: new Date().toISOString()
-        }
-      };
-
-      // 7. Create submission document
-      const submissionDoc = await addDoc(collection(db, 'submissions'), {
-        activityId: currentActivity.id,
-        studentName,
-        studentEmail,
-        studentId,
-        content: submissionContent.content,
-        metadata: submissionContent.metadata,
-        timestamp: new Date(),
-        status: 'submitted',
-        version: '1.0'
-      });
-
-      console.log('Submission successful:', submissionDoc.id);
-
-      // 8. Update local state
-      setStudentId(studentId);
-      setSubmitted(true);
-      setTextContent('');
-      setTempImageUrls([]);
-
-      // Optional: Add submission to activity's submissions array
-      try {
-        const activityRef = doc(db, 'activities', currentActivity.id);
-        await updateDoc(activityRef, {
-          submissions: arrayUnion(submissionDoc.id)
-        });
-      } catch (activityUpdateError) {
-        console.warn('Failed to update activity with submission ID:', activityUpdateError);
-        // Continue despite failure as this is not critical
-      }
-
-    } catch (error) {
-      console.error('Error in submission process:', error);
-      alert(
-        error.message || 'Error submitting your work. Please check the console for more details and try again.'
-      );
-      throw error; // Re-throw to allow caller to handle if needed
+  try {
+    // 1. Basic validation
+    if (!studentName.trim() || !studentEmail.trim() || !textContent.trim()) {
+      throw new Error('Please fill in all required fields');
     }
-  };
+
+    // 2. Check for existing submissions
+    const existingSubmissions = await getDocs(
+      query(
+        collection(db, 'submissions'),
+        where('activityId', '==', currentActivity.id),
+        where('studentEmail', '==', studentEmail)
+      )
+    );
+
+    if (!existingSubmissions.empty) {
+      console.log('Already submitted for this activity');
+      setSubmitted(true);
+      const submission = existingSubmissions.docs[0].data();
+      setStudentId(submission.studentId);
+      return;
+    }
+
+    // 3. Get or create student ID
+    let studentId;
+    const studentQuery = query(
+      collection(db, 'students'),
+      where('email', '==', studentEmail)
+    );
+    const studentSnapshot = await getDocs(studentQuery);
+
+    if (!studentSnapshot.empty) {
+      studentId = studentSnapshot.docs[0].data().studentId;
+    } else {
+      const allStudentsQuery = query(
+        collection(db, 'students'),
+        orderBy('studentId', 'desc'),
+        limit(1)
+      );
+      const allStudentsSnapshot = await getDocs(allStudentsQuery);
+      studentId = (allStudentsSnapshot.empty ? 0 : allStudentsSnapshot.docs[0].data().studentId) + 1;
+
+      await addDoc(collection(db, 'students'), {
+        email: studentEmail,
+        name: studentName,
+        studentId: studentId,
+        createdAt: new Date()
+      });
+    }
+
+    // 4. Process images - move from temp to permanent storage
+    const permanentImages = [];
+    for (const imageUrl of images) {
+      if (imageUrl.includes('/temp/')) {
+        const filename = imageUrl.split('/').pop().split('?')[0];
+        const permanentPath = `submissions/${currentActivity.id}/${studentId}/${filename}`;
+        
+        // Fetch image from temporary URL
+        const response = await fetch(imageUrl);
+        if (!response.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
+        const blob = await response.blob();
+        
+        // Upload to permanent location
+        const permanentRef = ref(storage, permanentPath);
+        const metadata = {
+          contentType: blob.type,
+          customMetadata: {
+            originalUrl: imageUrl,
+            submissionId: `${currentActivity.id}_${studentId}`,
+            uploadedAt: new Date().toISOString()
+          }
+        };
+
+        const uploadResult = await uploadBytes(permanentRef, blob, metadata);
+        const permanentUrl = await getDownloadURL(uploadResult.ref);
+        permanentImages.push(permanentUrl);
+
+        // Clean up temporary file
+        try {
+          const tempRef = ref(storage, imageUrl.split('.com/o/')[1].split('?')[0]);
+          await deleteObject(tempRef);
+        } catch (cleanupError) {
+          console.warn('Failed to cleanup temp file:', cleanupError);
+        }
+      } else {
+        permanentImages.push(imageUrl); // Keep already permanent URLs
+      }
+    }
+
+    // 5. Create submission document
+    // Inside handleSubmit, replace the image processing section with:
+    const submissionDoc = await addDoc(collection(db, 'submissions'), {
+      activityId: currentActivity.id,
+      studentName,
+      studentEmail,
+      studentId,
+      content: textContent,
+      images: images, // base64 strings will be stored directly
+      timestamp: new Date(),
+      status: 'submitted',
+      version: '1.0'
+    });
+
+    // 6. Update local state
+    setStudentId(studentId);
+    setSubmitted(true);
+    setImages(permanentImages);
+
+    // 7. Update activity's submissions array
+    try {
+      const activityRef = doc(db, 'activities', currentActivity.id);
+      await updateDoc(activityRef, {
+        submissions: arrayUnion(submissionDoc.id)
+      });
+    } catch (activityUpdateError) {
+      console.warn('Failed to update activity with submission ID:', activityUpdateError);
+    }
+
+  } catch (error) {
+    console.error('Error in submission process:', error);
+    alert(error.message || 'Error submitting your work. Please try again.');
+    throw error;
+  }
+};
 
 
   const handleReset = () => {
@@ -863,6 +710,36 @@ useEffect(() => {
   
 
 
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+  
+    if (images.length >= 3) {
+      alert('Maximum 3 images allowed');
+      return;
+    }
+  
+    try {
+      // Convert to base64
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64String = reader.result;
+        setImages(prev => [...prev, base64String]);
+      };
+      reader.readAsDataURL(file);
+      e.target.value = ''; // Reset file input
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('Failed to upload image. Please try again.');
+    }
+  };
+  
+  
+  const removeImage = (index) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+
   // Render logic
   if (phase === 'wait' || !currentActivity) {
     return (
@@ -872,118 +749,149 @@ useEffect(() => {
     );
   }
 
-  if (phase === 'submit') {
-    if (submitted) {
-      return (
-        <div className="p-8">
-          <div className="bg-gray-100 p-4 mb-6 rounded-lg">
-            <h2 className="text-lg font-semibold">
-              {currentActivity?.name || 'Activity'}
-              {studentName && ` - ${studentName}`}
-            </h2>
-            <p className="text-gray-600 text-sm">{studentEmail}</p>
-          </div>
-          <h1 className="text-2xl">Your submission has been received</h1>
-          <p>Please wait for the evaluation phase to begin.</p>
-        </div>
-      );
-    }
+  // In Student.jsx, replace the submit phase return statement with this:
 
+if (phase === 'submit') {
+  if (submitted) {
     return (
       <div className="p-8">
         <div className="bg-gray-100 p-4 mb-6 rounded-lg">
-          <h2 className="text-lg font-semibold">
-            {currentActivity?.name || 'Activity'}
-            {studentName && ` - ${studentName}`}
+          <h2 className="text-xl font-semibold mb-2">
+            {currentActivity?.name || 'Activity'} - Submission Received
           </h2>
+          <p className="text-gray-700 mb-2">Submitted by: {studentName}</p>
           <p className="text-gray-600 text-sm">{studentEmail}</p>
         </div>
-        <h1 className="text-2xl mb-4">Submit Your Work</h1>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <input
-              type="text"
-              value={studentName}
-              onChange={(e) => setStudentName(e.target.value)}
-              placeholder="Your Name"
-              className="border p-2 w-full"
-              required
-            />
-          </div>
-          <div>
-            <input
-              type="email"
-              value={studentEmail}
-              onChange={(e) => setStudentEmail(e.target.value)}
-              placeholder="Your Email"
-              className="border p-2 w-full"
-              required
-            />
-          </div>
-          <div>
-            <div className="space-y-4">
-              <div className="relative">
-                <div
-                  ref={(element) => {
-                    if (element && !element.innerHTML && textContent) {
-                      element.innerHTML = textContent;
-                    }
-                  }}
-                  className="border p-2 w-full min-h-32 bg-white"
-                  contentEditable
-                  suppressContentEditableWarning={true}
-                  onPaste={handlePaste}
-                  onInput={(e) => {
-                    const newContent = e.currentTarget.innerHTML;
-                    if (newContent !== textContent) {
-                      setTextContent(newContent);
-                    }
-                  }}
-                />
-                {!textContent && (
-                  <div className="absolute top-2 left-2 text-gray-400 pointer-events-none">
-                    Paste or type your submission here
-                  </div>
-                )}
+        
+        <div className="bg-white p-4 rounded-lg border mb-4">
+          <h3 className="font-medium mb-2">Your Submission:</h3>
+          <div className="whitespace-pre-wrap mb-4">{textContent}</div>
+          {images.length > 0 && (
+            <div>
+              <h4 className="font-medium mb-2">Attached Images:</h4>
+              <div className="grid grid-cols-2 gap-4">
+                {images.map((img, index) => (
+                  <img 
+                    key={index}
+                    src={img}
+                    alt={`Submission image ${index + 1}`}
+                    className="max-w-full h-auto rounded"
+                  />
+                ))}
               </div>
-
-              {/* Image preview (using temporary URLs) */}
-              {tempImageUrls.length > 0 && (
-                <div className="grid grid-cols-2 gap-4 mt-4">
-                  {tempImageUrls.map((imageUrl, index) => (
-                    <div key={index} className="relative">
-                      <img
-                        src={imageUrl}
-                        alt={`Upload preview ${index + 1}`}
-                        className="max-w-full h-auto"
-                      />
-                      <button
-                        onClick={() => {
-                          setTempImageUrls(prev => prev.filter((_, i) => i !== index));
-                          setTextContent(prevContent =>
-                            prevContent.replace(`<img src="${imageUrl}" alt="Pasted Image" />`, '')
-                          );
-                        }}
-                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
-          </div>
-          <button
-            type="submit"
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
-          >
-            Submit
-          </button>
-        </form>
+          )}
+        </div>
+
+        <button
+          onClick={handleReset}
+          className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+        >
+          Remove Submission and Start Over
+        </button>
+        
+        <p className="mt-4 text-gray-600">Please wait for the evaluation phase to begin.</p>
       </div>
     );
   }
+
+  return (
+    <div className="p-8">
+      <div className="bg-gray-100 p-4 mb-6 rounded-lg">
+        <h2 className="text-lg font-semibold">
+          {currentActivity?.name || 'Activity'}
+          {studentName && ` - ${studentName}`}
+        </h2>
+        <p className="text-gray-600 text-sm">{studentEmail}</p>
+      </div>
+      
+      <h1 className="text-2xl mb-4">Submit Your Work</h1>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <input
+            type="text"
+            value={studentName}
+            onChange={(e) => setStudentName(e.target.value)}
+            placeholder="Your Name"
+            className="border p-2 w-full rounded"
+            required
+          />
+        </div>
+        
+        <div>
+          <input
+            type="email"
+            value={studentEmail}
+            onChange={(e) => setStudentEmail(e.target.value)}
+            placeholder="Your Email"
+            className="border p-2 w-full rounded"
+            required
+          />
+        </div>
+
+        <div>
+          <textarea
+            value={textContent}
+            onChange={(e) => setTextContent(e.target.value)}
+            placeholder="Type your submission here"
+            className="border p-2 w-full h-48 rounded font-mono"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Images (Maximum 3)
+          </label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="block w-full text-sm text-gray-500
+              file:mr-4 file:py-2 file:px-4
+              file:rounded file:border-0
+              file:text-sm file:font-semibold
+              file:bg-blue-50 file:text-blue-700
+              hover:file:bg-blue-100"
+            disabled={images.length >= 3}
+          />
+          {images.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              {images.map((img, index) => (
+                <div key={index} className="relative">
+                  <img
+                    src={img}
+                    alt={`Upload ${index + 1}`}
+                    className="max-w-full h-auto rounded"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(index)}
+                    className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {images.length >= 3 && (
+            <p className="text-sm text-red-500 mt-1">
+              Maximum number of images (3) reached
+            </p>
+          )}
+        </div>
+
+        <button
+          type="submit"
+          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
+        >
+          Submit
+        </button>
+      </form>
+    </div>
+  );
+}
 
   const ExpiredSessionView = () => (
     <div className="p-8">
@@ -1005,6 +913,7 @@ useEffect(() => {
       </div>
     </div>
   );
+
 
   if (phase === 'evaluate') {
     if (!studentEmail || !studentId) {

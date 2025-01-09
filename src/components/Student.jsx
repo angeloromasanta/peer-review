@@ -33,13 +33,18 @@ function Student() {
   const [evaluationPair, setEvaluationPair] = useState(null);
   const [leftComments, setLeftComments] = useState('');
   const [rightComments, setRightComments] = useState('');
-  const [submitted, setSubmitted] = useState(false);
-  const [evaluationSubmitted, setEvaluationSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState(() => 
+  localStorage.getItem('submitted') === 'true'
+);
+const [evaluationSubmitted, setEvaluationSubmitted] = useState(() => 
+  localStorage.getItem('evaluationSubmitted') === 'true'
+);
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
   const [textContent, setTextContent] = useState('');
   const [feedbackGiven, setFeedbackGiven] = useState([]);
   const [starredEvaluations, setStarredEvaluations] = useState([]);
   const [images, setImages] = useState([]);
+  
   const [tempImageUrls, setTempImageUrls] = useState([]); // Temporary URLs for preview
 
 
@@ -60,6 +65,28 @@ function Student() {
     images: []
   });
 
+// Add this effect near the top of the component
+useEffect(() => {
+  if ((!studentEmail || !studentId) && localStorage.getItem('studentEmail')) {
+    recoverSession();
+  }
+}, []); // Run once on component mount
+  
+// Add this effect to warn users before closing/refreshing
+useEffect(() => {
+  const handleBeforeUnload = (e) => {
+    if (phase === 'evaluate' && !evaluationSubmitted) {
+      e.preventDefault();
+      e.returnValue = 'You have unsaved evaluation progress. Are you sure you want to leave?';
+      return e.returnValue;
+    }
+  };
+
+  window.addEventListener('beforeunload', handleBeforeUnload);
+  return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+}, [phase, evaluationSubmitted]);
+
+
   // Persistence effect
   useEffect(() => {
     if (studentName) localStorage.setItem('studentName', studentName);
@@ -67,6 +94,10 @@ function Student() {
     if (studentId) localStorage.setItem('studentId', studentId.toString());
   }, [studentName, studentEmail, studentId]);
 
+  useEffect(() => {
+    localStorage.setItem('submitted', submitted);
+    localStorage.setItem('evaluationSubmitted', evaluationSubmitted);
+  }, [submitted, evaluationSubmitted]);
 
 
   useEffect(() => {
@@ -74,36 +105,31 @@ function Student() {
       collection(db, 'activities'),
       where('isActive', '==', true)
     );
-
+  
     const unsubscribe = onSnapshot(q, (snapshot) => {
       if (snapshot.empty) {
-        console.log('No active activity found - resetting state');
+        console.log('No active activity found');
         setPhase('wait');
         setCurrentActivity(null);
-        setStudentName('');
-        setStudentEmail('');
+        // Don't clear everything - preserve session info
         setSubmission('');
         setEvaluationPair(null);
         setLeftComments('');
         setRightComments('');
-        setSubmitted(false);
-        setEvaluationSubmitted(false);
-        setReceivedEvaluations([]);
-        setStudentId(null);
-        localStorage.clear();
+        // Don't reset submitted states here
         return;
       }
-
+  
       const activity = {
         id: snapshot.docs[0].id,
         ...snapshot.docs[0].data(),
       };
       console.log('Active activity updated:', activity);
-
+  
       setCurrentActivity(activity);
       setPhase(activity.phase);
-
-      // Reset evaluation state when round changes
+  
+      // Only reset evaluation state if round changes
       if (activity.currentRound !== currentActivity?.currentRound) {
         console.log('Round changed from', currentActivity?.currentRound, 'to', activity.currentRound);
         setEvaluationSubmitted(false);
@@ -112,7 +138,7 @@ function Student() {
         setRightComments('');
       }
     });
-
+  
     return () => unsubscribe();
   }, [currentActivity?.currentRound]);
 
@@ -782,6 +808,59 @@ function Student() {
     fetchEvaluations();
   }, [currentActivity, phase, studentEmail, studentId]); // Include all dependencies
 
+  const recoverSession = async () => {
+    if (!studentEmail || !studentId) return false;
+    
+    try {
+      // Verify student exists
+      const studentQuery = query(
+        collection(db, 'students'),
+        where('email', '==', studentEmail),
+        where('studentId', '==', studentId)
+      );
+      const studentSnapshot = await getDocs(studentQuery);
+      
+      if (studentSnapshot.empty) {
+        console.log('No matching student found');
+        return false;
+      }
+  
+      // Check for submission in current activity
+      if (currentActivity) {
+        const submissionQuery = query(
+          collection(db, 'submissions'),
+          where('activityId', '==', currentActivity.id),
+          where('studentEmail', '==', studentEmail)
+        );
+        const submissionSnapshot = await getDocs(submissionQuery);
+        
+        if (!submissionSnapshot.empty) {
+          setSubmitted(true);
+        }
+  
+        // Check for evaluation in current round
+        if (phase === 'evaluate') {
+          const evaluationQuery = query(
+            collection(db, 'evaluations'),
+            where('activityId', '==', currentActivity.id),
+            where('evaluatorEmail', '==', studentEmail),
+            where('round', '==', currentActivity.currentRound)
+          );
+          const evaluationSnapshot = await getDocs(evaluationQuery);
+          
+          if (!evaluationSnapshot.empty) {
+            setEvaluationSubmitted(true);
+          }
+        }
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error recovering session:', error);
+      return false;
+    }
+  };
+  
 
 
   // Render logic
@@ -906,15 +985,30 @@ function Student() {
     );
   }
 
+  const ExpiredSessionView = () => (
+    <div className="p-8">
+      <h1 className="text-2xl text-red-600">Session expired</h1>
+      <p>Click below to try recovering your session, or refresh the page to start over.</p>
+      <div className="mt-4 space-x-4">
+        <button
+          onClick={recoverSession}
+          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+        >
+          Recover Session
+        </button>
+        <button
+          onClick={handleReset}
+          className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+        >
+          Start Over
+        </button>
+      </div>
+    </div>
+  );
 
   if (phase === 'evaluate') {
     if (!studentEmail || !studentId) {
-      return (
-        <div className="p-8">
-          <h1 className="text-2xl text-red-600">Session expired</h1>
-          <p>Please refresh the page to start over.</p>
-        </div>
-      );
+      return <ExpiredSessionView />;
     }
 
     if (evaluationSubmitted) {
@@ -990,18 +1084,7 @@ function Student() {
 
   if (phase === 'final') {
     if (!studentEmail || !studentId) {
-      return (
-        <div className="p-8">
-          <h1 className="text-2xl text-red-600">Session expired</h1>
-          <p>Please refresh the page and start over.</p>
-          <button
-            onClick={handleReset}
-            className="mt-4 bg-blue-500 text-white px-4 py-2 rounded"
-          >
-            Reset Session
-          </button>
-        </div>
-      );
+      return <ExpiredSessionView />;
     }
 
     return (

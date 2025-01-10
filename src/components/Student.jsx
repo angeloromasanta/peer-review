@@ -7,13 +7,14 @@ import {
   query,
   where,
   getDocs,
-  getDoc,  // Add this import
-  doc,     // Add this import
+  getDoc, 
+  doc,    
   onSnapshot,
   limit,
   orderBy,
   arrayUnion,
   updateDoc,
+  runTransaction 
 } from 'firebase/firestore';
 import _ from 'lodash';
 import {
@@ -24,7 +25,6 @@ import { runEvaluationRound } from './evaluationManager';
 
 
 function Student() {
-  // State declarations
   const [phase, setPhase] = useState('wait');
   const [currentActivity, setCurrentActivity] = useState(null);
   const [studentName, setStudentName] = useState(() => localStorage.getItem('studentName') || '');
@@ -42,38 +42,24 @@ const [evaluationSubmitted, setEvaluationSubmitted] = useState(() =>
   const [receivedEvaluations, setReceivedEvaluations] = useState([]);
   const [textContent, setTextContent] = useState('');
   const [feedbackGiven, setFeedbackGiven] = useState([]);
-  const [starredEvaluations, setStarredEvaluations] = useState([]);
   const [images, setImages] = useState([]);
   
-  const [tempImageUrls, setTempImageUrls] = useState([]); // Temporary URLs for preview
-
-
   const storage = getStorage();
   const [studentId, setStudentId] = useState(() =>
     localStorage.getItem('studentId') ? Number(localStorage.getItem('studentId')) : null
   );
 
-  const getSubmissionContent = () => {
-    return {
-      text: textContent,
-      images: images
-    };
-  };
 
-  const [contentState, setContentState] = useState({
-    text: '',
-    images: []
-  });
 
-// Add this effect near the top of the component
-useEffect(() => {
-  if ((!studentEmail || !studentId) && localStorage.getItem('studentEmail')) {
-    recoverSession();
-  }
-}, []); // Run once on component mount
+  useEffect(() => {
+    if ((!studentEmail || !studentId) && localStorage.getItem('studentEmail')) {
+      recoverSession();
+    }
+  }, [studentEmail, studentId]); 
   
 // Add this effect to warn users before closing/refreshing
 useEffect(() => {
+  // Define handler outside to avoid reference issues
   const handleBeforeUnload = (e) => {
     if (phase === 'evaluate' && !evaluationSubmitted) {
       e.preventDefault();
@@ -84,7 +70,7 @@ useEffect(() => {
 
   window.addEventListener('beforeunload', handleBeforeUnload);
   return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-}, [phase, evaluationSubmitted]);
+}, [phase, evaluationSubmitted]); // Remove handleBeforeUnload from deps
 
 
   // Persistence effect
@@ -225,226 +211,136 @@ useEffect(() => {
   };
 
 
-  const handlePaste = async (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
   
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.type.indexOf('image') !== -1) {
-        const file = item.getAsFile();
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64String = reader.result;
-          const imgPlaceholder = `<img src="${base64String}" class="max-w-full h-auto my-2" alt="Pasted image" />`;
-          setTextContent(prev => prev + imgPlaceholder);
-        };
-        reader.readAsDataURL(file);
-        break;
-      }
-    }
-  };
+  
 
-  const handleDirectImagePaste = async (item) => {
-    const file = item.getAsFile();
-    if (!file) {
-      console.log('No file in clipboard item');
-      return;
-    }
 
-    console.log('Image file details:', {
-      name: file.name,
-      size: file.size,
-      type: file.type
-    });
-
-    await handleImageFile(file);
-  };
-
-  const handleImageFile = async (file) => {
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!currentActivity || submitted) return;
+  
     try {
-      // Convert file to base64
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        const base64data = event.target.result;
-        
-        // Add directly to images state
-        setImages(prev => [...prev, base64data]);
-        
-        // Update content to show image
-        const imgPlaceholder = `<img 
-          src="${base64data}" 
-          class="max-w-full h-auto my-2" 
-          alt="Uploaded image" 
-        />`;
-        
-        setTextContent(prev => prev + imgPlaceholder);
-      };
+      // 1. Basic validation
+      if (!studentName.trim() || !studentEmail.trim() || !textContent.trim()) {
+        throw new Error('Please fill in all required fields');
+      }
   
-      reader.readAsDataURL(file);
-    } catch (error) {
-      console.error('Error handling image:', error);
-      alert('Failed to process image. Please try again.');
-    }
-  };
-
-  const ContentEditable = () => {
-    console.log('Rendering ContentEditable, current content length:', textContent.length);
-
-    return (
-      <div
-        className="border p-2 w-full min-h-32 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        contentEditable
-        suppressContentEditableWarning={true}
-        onPaste={handlePaste}
-        onInput={(e) => {
-          console.log('Content changed');
-          const content = e.currentTarget.innerHTML;
-          console.log('New content length:', content.length);
-          setTextContent(content);
-        }}
-        dangerouslySetInnerHTML={{ __html: textContent }}
-        role="textbox"
-        aria-multiline="true"
-      />
-    );
-  };
-
-
-
-  // Handle submission
-
-
- // Replace the handleSubmit function with this version:
-
-const handleSubmit = async (event) => {
-  event.preventDefault();
-  if (!currentActivity || submitted) return;
-
-  try {
-    // 1. Basic validation
-    if (!studentName.trim() || !studentEmail.trim() || !textContent.trim()) {
-      throw new Error('Please fill in all required fields');
-    }
-
-    // 2. Check for existing submissions
-    const existingSubmissions = await getDocs(
-      query(
-        collection(db, 'submissions'),
-        where('activityId', '==', currentActivity.id),
-        where('studentEmail', '==', studentEmail)
-      )
-    );
-
-    if (!existingSubmissions.empty) {
-      console.log('Already submitted for this activity');
-      setSubmitted(true);
-      const submission = existingSubmissions.docs[0].data();
-      setStudentId(submission.studentId);
-      return;
-    }
-
-    // 3. Get or create student ID
-    let studentId;
-    const studentQuery = query(
-      collection(db, 'students'),
-      where('email', '==', studentEmail)
-    );
-    const studentSnapshot = await getDocs(studentQuery);
-
-    if (!studentSnapshot.empty) {
-      studentId = studentSnapshot.docs[0].data().studentId;
-    } else {
-      const allStudentsQuery = query(
-        collection(db, 'students'),
-        orderBy('studentId', 'desc'),
-        limit(1)
-      );
-      const allStudentsSnapshot = await getDocs(allStudentsQuery);
-      studentId = (allStudentsSnapshot.empty ? 0 : allStudentsSnapshot.docs[0].data().studentId) + 1;
-
-      await addDoc(collection(db, 'students'), {
-        email: studentEmail,
-        name: studentName,
-        studentId: studentId,
-        createdAt: new Date()
-      });
-    }
-
-    // 4. Process images - move from temp to permanent storage
-    const permanentImages = [];
-    for (const imageUrl of images) {
-      if (imageUrl.includes('/temp/')) {
-        const filename = imageUrl.split('/').pop().split('?')[0];
-        const permanentPath = `submissions/${currentActivity.id}/${studentId}/${filename}`;
-        
-        // Fetch image from temporary URL
-        const response = await fetch(imageUrl);
-        if (!response.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
-        const blob = await response.blob();
-        
-        // Upload to permanent location
-        const permanentRef = ref(storage, permanentPath);
-        const metadata = {
-          contentType: blob.type,
-          customMetadata: {
-            originalUrl: imageUrl,
-            submissionId: `${currentActivity.id}_${studentId}`,
-            uploadedAt: new Date().toISOString()
-          }
-        };
-
-        const uploadResult = await uploadBytes(permanentRef, blob, metadata);
-        const permanentUrl = await getDownloadURL(uploadResult.ref);
-        permanentImages.push(permanentUrl);
-
-        // Clean up temporary file
-        try {
-          const tempRef = ref(storage, imageUrl.split('.com/o/')[1].split('?')[0]);
-          await deleteObject(tempRef);
-        } catch (cleanupError) {
-          console.warn('Failed to cleanup temp file:', cleanupError);
+      await runTransaction(db, async (transaction) => {
+        // 2. Check for existing submissions
+        const existingSubmissionsRef = query(
+          collection(db, 'submissions'),
+          where('activityId', '==', currentActivity.id),
+          where('studentEmail', '==', studentEmail)
+        );
+        const existingSubmissions = await getDocs(existingSubmissionsRef);
+  
+        if (!existingSubmissions.empty) {
+          console.log('Already submitted for this activity');
+          setSubmitted(true);
+          const submission = existingSubmissions.docs[0].data();
+          setStudentId(submission.studentId);
+          return;
         }
-      } else {
-        permanentImages.push(imageUrl); // Keep already permanent URLs
-      }
-    }
-
-    // 5. Create submission document
-    // Inside handleSubmit, replace the image processing section with:
-    const submissionDoc = await addDoc(collection(db, 'submissions'), {
-      activityId: currentActivity.id,
-      studentName,
-      studentEmail,
-      studentId,
-      content: textContent,
-      images: images, // base64 strings will be stored directly
-      timestamp: new Date(),
-      status: 'submitted',
-      version: '1.0'
-    });
-
-    // 6. Update local state
-    setStudentId(studentId);
-    setSubmitted(true);
-    setImages(permanentImages);
-
-    // 7. Update activity's submissions array
-    try {
-      const activityRef = doc(db, 'activities', currentActivity.id);
-      await updateDoc(activityRef, {
-        submissions: arrayUnion(submissionDoc.id)
+  
+        // 3. Get or create student ID
+        let studentId;
+        const studentQuery = query(
+          collection(db, 'students'),
+          where('email', '==', studentEmail)
+        );
+        const studentSnapshot = await getDocs(studentQuery);
+  
+        if (!studentSnapshot.empty) {
+          studentId = studentSnapshot.docs[0].data().studentId;
+        } else {
+          const allStudentsQuery = query(
+            collection(db, 'students'),
+            orderBy('studentId', 'desc'),
+            limit(1)
+          );
+          const allStudentsSnapshot = await getDocs(allStudentsQuery);
+          studentId = (allStudentsSnapshot.empty ? 0 : allStudentsSnapshot.docs[0].data().studentId) + 1;
+  
+          const newStudentRef = doc(collection(db, 'students'));
+          transaction.set(newStudentRef, {
+            email: studentEmail,
+            name: studentName,
+            studentId: studentId,
+            createdAt: new Date()
+          });
+        }
+  
+        // 4. Process images - move from temp to permanent storage
+        const permanentImages = [];
+        for (const imageUrl of images) {
+          if (imageUrl.includes('/temp/')) {
+            const filename = imageUrl.split('/').pop().split('?')[0];
+            const permanentPath = `submissions/${currentActivity.id}/${studentId}/${filename}`;
+            
+            // Fetch image from temporary URL
+            const response = await fetch(imageUrl);
+            if (!response.ok) throw new Error(`Failed to fetch image: ${imageUrl}`);
+            const blob = await response.blob();
+            
+            // Upload to permanent location
+            const permanentRef = ref(storage, permanentPath);
+            const metadata = {
+              contentType: blob.type,
+              customMetadata: {
+                originalUrl: imageUrl,
+                submissionId: `${currentActivity.id}_${studentId}`,
+                uploadedAt: new Date().toISOString()
+              }
+            };
+  
+            const uploadResult = await uploadBytes(permanentRef, blob, metadata);
+            const permanentUrl = await getDownloadURL(uploadResult.ref);
+            permanentImages.push(permanentUrl);
+  
+            // Clean up temporary file
+            try {
+              const tempRef = ref(storage, imageUrl.split('.com/o/')[1].split('?')[0]);
+              await deleteObject(tempRef);
+            } catch (cleanupError) {
+              console.warn('Failed to cleanup temp file:', cleanupError);
+            }
+          } else {
+            permanentImages.push(imageUrl); // Keep already permanent URLs
+          }
+        }
+  
+        // 5. Create submission document
+        const submissionRef = doc(collection(db, 'submissions'));
+        transaction.set(submissionRef, {
+          activityId: currentActivity.id,
+          studentName,
+          studentEmail,
+          studentId,
+          content: textContent,
+          images: permanentImages, // Now using permanent image URLs
+          timestamp: new Date(),
+          status: 'submitted',
+          version: '1.0'
+        });
+  
+        // 6. Update activity's submissions array
+        const activityRef = doc(db, 'activities', currentActivity.id);
+        transaction.update(activityRef, {
+          submissions: arrayUnion(submissionRef.id)
+        });
+  
+        // 7. Update local state after successful transaction
+        setStudentId(studentId);
+        setSubmitted(true);
+        setImages(permanentImages);
       });
-    } catch (activityUpdateError) {
-      console.warn('Failed to update activity with submission ID:', activityUpdateError);
+  
+    } catch (error) {
+      console.error('Error in submission process:', error);
+      alert(error.message || 'Error submitting your work. Please try again.');
+      throw error;
     }
-
-  } catch (error) {
-    console.error('Error in submission process:', error);
-    alert(error.message || 'Error submitting your work. Please try again.');
-    throw error;
-  }
-};
+  };
 
 
   const handleReset = () => {
@@ -463,9 +359,7 @@ const handleSubmit = async (event) => {
     localStorage.clear();
   };
 
-  // Get pair for evaluation (updated for new algorithm)
-  // Update the evaluation pair fetching useEffect in Student.jsx
-  // In Student.jsx, update the getEvaluationPair function:
+
 
   useEffect(() => {
     const getEvaluationPair = async () => {
@@ -568,7 +462,7 @@ const handleSubmit = async (event) => {
     setRightComments('');
   };
 
-  // Get received evaluations
+
   // Get received evaluations
   useEffect(() => {
     if (!currentActivity || phase !== 'final' || !studentEmail || !studentId) {
@@ -709,7 +603,6 @@ const handleSubmit = async (event) => {
   };
   
 
-
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -719,13 +612,25 @@ const handleSubmit = async (event) => {
       return;
     }
   
+    if (file.size > 1024 * 1024) {
+      alert('Image must be smaller than 1MB');
+      return;
+    }
+  
     try {
-      // Convert to base64
       const reader = new FileReader();
+      
+      reader.onerror = () => {
+        console.error('FileReader error:', reader.error);
+        alert('Failed to read image file. Please try again.');
+      };
+  
       reader.onloadend = () => {
+        if (reader.error) return; // Error already handled
         const base64String = reader.result;
         setImages(prev => [...prev, base64String]);
       };
+  
       reader.readAsDataURL(file);
       e.target.value = ''; // Reset file input
     } catch (error) {
@@ -734,11 +639,11 @@ const handleSubmit = async (event) => {
     }
   };
   
-  
-  const removeImage = (index) => {
-    setImages(prev => prev.filter((_, i) => i !== index));
-  };
 
+// Replace the removeImage function
+const removeImage = (index) => {
+  setImages(prev => prev.filter((_, i) => i !== index));
+};
 
   // Render logic
   if (phase === 'wait' || !currentActivity) {
@@ -893,26 +798,51 @@ if (phase === 'submit') {
   );
 }
 
-  const ExpiredSessionView = () => (
+const ExpiredSessionView = () => {
+  const [isRecovering, setIsRecovering] = useState(false);
+
+  const handleRecoverSession = async () => {
+    setIsRecovering(true);
+    try {
+      const recovered = await recoverSession();
+      if (!recovered) {
+        alert('Failed to recover session. Please start over.');
+      }
+    } catch (error) {
+      console.error('Error recovering session:', error);
+      alert('Error recovering session. Please try again.');
+    } finally {
+      setIsRecovering(false);
+    }
+  };
+
+  return (
     <div className="p-8">
       <h1 className="text-2xl text-red-600">Session expired</h1>
       <p>Click below to try recovering your session, or refresh the page to start over.</p>
       <div className="mt-4 space-x-4">
         <button
-          onClick={recoverSession}
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          onClick={handleRecoverSession}
+          disabled={isRecovering}
+          className={`${
+            isRecovering ? 'bg-blue-300' : 'bg-blue-500 hover:bg-blue-600'
+          } text-white px-4 py-2 rounded transition-colors`}
         >
-          Recover Session
+          {isRecovering ? 'Recovering...' : 'Recover Session'}
         </button>
         <button
           onClick={handleReset}
-          className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+          disabled={isRecovering}
+          className={`${
+            isRecovering ? 'bg-gray-300' : 'bg-gray-500 hover:bg-gray-600'
+          } text-white px-4 py-2 rounded transition-colors`}
         >
           Start Over
         </button>
       </div>
     </div>
   );
+};
 
 
   if (phase === 'evaluate') {
@@ -941,9 +871,9 @@ if (phase === 'submit') {
               <div className="mb-2 text-sm font-medium text-gray-500">
                 Submission by: {currentActivity?.hideNames ? "Anonymous Submission" : evaluationPair.left.studentName}
               </div>
-              <div className="h-48 overflow-y-auto mb-4">
-                <div dangerouslySetInnerHTML={{ __html: evaluationPair.left.content }} />
-              </div>
+              <div className="h-48 overflow-y-auto mb-4 whitespace-pre-wrap">
+  {evaluationPair.left.content}
+</div>
               <textarea
                 value={leftComments}
                 onChange={(e) => setLeftComments(e.target.value)}
@@ -963,9 +893,9 @@ if (phase === 'submit') {
               <div className="mb-2 text-sm font-medium text-gray-500">
                 Submission by: {currentActivity?.hideNames ? "Anonymous Submission" : evaluationPair.right.studentName}
               </div>
-              <div className="h-48 overflow-y-auto mb-4">
-                <div dangerouslySetInnerHTML={{ __html: evaluationPair.right.content }} />
-              </div>
+              <div className="h-48 overflow-y-auto mb-4 whitespace-pre-wrap">
+  {evaluationPair.right.content}
+</div>
               <textarea
                 value={rightComments}
                 onChange={(e) => setRightComments(e.target.value)}

@@ -50,6 +50,23 @@ const [evaluationSubmitted, setEvaluationSubmitted] = useState(() =>
   );
 
 
+// Add this useEffect near the top of your Student component
+useEffect(() => {
+  // Check for simulation parameters in URL
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('simulate') === 'true') {
+    const simulatedName = params.get('studentName');
+    const simulatedEmail = params.get('studentEmail');
+    
+    if (simulatedName && simulatedEmail) {
+      setStudentName(simulatedName);
+      setStudentEmail(simulatedEmail);
+      localStorage.setItem('studentName', simulatedName);
+      localStorage.setItem('studentEmail', simulatedEmail);
+    }
+  }
+}, []); // Empty dependency array - only runs once on mount
+
 
   useEffect(() => {
     if ((!studentEmail || !studentId) && localStorage.getItem('studentEmail')) {
@@ -629,6 +646,8 @@ useEffect(() => {
         if (reader.error) return; // Error already handled
         const base64String = reader.result;
         setImages(prev => [...prev, base64String]);
+        // Keep the text content by reusing the existing state
+        // setTextContent(prevContent => prevContent); //This line was not doing anything before, so I removed it
       };
   
       reader.readAsDataURL(file);
@@ -637,8 +656,7 @@ useEffect(() => {
       console.error('Error uploading image:', error);
       alert('Failed to upload image. Please try again.');
     }
-  };
-  
+};
 
 // Replace the removeImage function
 const removeImage = (index) => {
@@ -872,8 +890,24 @@ const ExpiredSessionView = () => {
                 Submission by: {currentActivity?.hideNames ? "Anonymous Submission" : evaluationPair.left.studentName}
               </div>
               <div className="h-48 overflow-y-auto mb-4 whitespace-pre-wrap">
-  {evaluationPair.left.content}
-</div>
+                {evaluationPair.left.content}
+              </div>
+              {/* Add images section for left submission */}
+              {evaluationPair.left.images && evaluationPair.left.images.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="font-medium mb-2">Attached Images:</h4>
+                  <div className="grid grid-cols-1 gap-4">
+                    {evaluationPair.left.images.map((img, index) => (
+                      <img 
+                        key={index}
+                        src={img}
+                        alt={`Left submission image ${index + 1}`}
+                        className="max-w-full h-auto rounded border"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
               <textarea
                 value={leftComments}
                 onChange={(e) => setLeftComments(e.target.value)}
@@ -887,15 +921,31 @@ const ExpiredSessionView = () => {
                 Left is Better
               </button>
             </div>
-
+    
             {/* Right Submission */}
             <div className="border p-4">
               <div className="mb-2 text-sm font-medium text-gray-500">
                 Submission by: {currentActivity?.hideNames ? "Anonymous Submission" : evaluationPair.right.studentName}
               </div>
               <div className="h-48 overflow-y-auto mb-4 whitespace-pre-wrap">
-  {evaluationPair.right.content}
-</div>
+                {evaluationPair.right.content}
+              </div>
+              {/* Add images section for right submission */}
+              {evaluationPair.right.images && evaluationPair.right.images.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="font-medium mb-2">Attached Images:</h4>
+                  <div className="grid grid-cols-1 gap-4">
+                    {evaluationPair.right.images.map((img, index) => (
+                      <img 
+                        key={index}
+                        src={img}
+                        alt={`Right submission image ${index + 1}`}
+                        className="max-w-full h-auto rounded border"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
               <textarea
                 value={rightComments}
                 onChange={(e) => setRightComments(e.target.value)}

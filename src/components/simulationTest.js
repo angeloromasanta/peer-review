@@ -1,127 +1,122 @@
 // simulationTest.js
-import { collection, addDoc, getDocs, query, where, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { runEvaluationRound } from './evaluationManager';
+import {
+  collection,
+  addDoc,
+  doc,
+  getDoc,
+  updateDoc,
+  writeBatch,
+} from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
-export const runSimulation = async () => {
-    const results = {
-        rounds: []
-    };
+const PLACEHOLDER_IMAGE_URLS = [
+  '/api/placeholder/400/300',
+  '/api/placeholder/400/300',
+  '/api/placeholder/400/300'
+];
 
-    try {
-        // Create test activity
-        const activityRef = await addDoc(collection(db, 'activities'), {
-            name: 'Simulation Test',
-            phase: 'submit',
-            currentRound: 0,
-        });
-        
-        // Create email to submission mapping
-        const submissionsByEmail = {};
-        
-        // Create 10 simulated submissions
-        for (let i = 1; i <= 10; i++) {
-            const studentEmail = `student${i}@test.com`;
-            const submissionDoc = await addDoc(collection(db, 'submissions'), {
-                activityId: activityRef.id,
-                studentName: `Student ${i}`,
-                studentEmail: studentEmail,
-                studentId: i,
-                content: `Test submission from student ${i}`,
-                timestamp: new Date(),
-            });
-            
-            submissionsByEmail[studentEmail] = {
-                id: submissionDoc.id,
-                studentId: i,
-                studentEmail
-            };
-        }
+const generateTestData = (index) => {
+  const topics = ['Machine Learning', 'Web Development', 'Data Science', 'Mobile Apps', 'Cloud Computing'];
+  const randomTopic = topics[Math.floor(Math.random() * topics.length)];
+  
+  return {
+    studentName: `Test Student ${index + 1}`,
+    studentEmail: `student${index + 1}@test.com`,
+    content: `Here's my submission about ${randomTopic}!\n\nI've been studying ${randomTopic} for the past few months and wanted to share my thoughts. This field is incredibly fascinating because it combines theoretical knowledge with practical applications.\n\nOne of the most interesting aspects I've discovered is how ${randomTopic} is transforming various industries. For example...\n\nIn conclusion, I believe ${randomTopic} will continue to evolve and shape our future in unexpected ways.`,
+    images: PLACEHOLDER_IMAGE_URLS.slice(0, Math.floor(Math.random() * 3) + 1) // Random 1-3 images
+  };
+};
 
-        // Run 5 rounds
-        for (let round = 1; round <= 5; round++) {
-            console.log(`\n=== Starting Round ${round} ===`);
-            
-            // Run evaluation round
-            const evaluatorAssignments = await runEvaluationRound(activityRef.id);
-            
-            // Update activity with new round
-            await updateDoc(doc(db, 'activities', activityRef.id), {
-                phase: 'evaluate',
-                currentRound: round,
-                evaluatorAssignments
-            });
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-            // Simulate evaluations based on student ID (lower ID wins)
-            const roundEvaluations = [];
-            
-            for (const [evaluatorEmail, pairEmails] of Object.entries(evaluatorAssignments)) {
-                const [email1, email2] = pairEmails;
-                const sub1 = submissionsByEmail[email1];
-                const sub2 = submissionsByEmail[email2];
-                
-                if (!sub1 || !sub2) {
-                    console.error('Missing submission for emails:', email1, email2);
-                    continue;
-                }
+const openStudentTab = async (studentData, activityId) => {
+  // Create URL with student data
+  const params = new URLSearchParams({
+    simulate: 'true',
+    studentName: studentData.studentName,
+    studentEmail: studentData.studentEmail,
+    activityId: activityId
+  });
+  
+  // Open new tab with student data
+  window.open(`/student?${params.toString()}`, `student_${studentData.studentEmail}`);
+  
+  // Add small delay to prevent overwhelming the browser
+  await delay(100);
+};
 
-                const winner = sub1.studentId < sub2.studentId ? sub1.id : sub2.id;
-                
-                const evaluation = await addDoc(collection(db, 'evaluations'), {
-                    activityId: activityRef.id,
-                    round,
-                    evaluatorEmail,
-                    leftSubmissionId: sub1.id,
-                    rightSubmissionId: sub2.id,
-                    winner,
-                    timestamp: new Date()
-                });
-                
-                roundEvaluations.push({
-                    evaluator: evaluatorEmail,
-                    pair: [email1, email2],
-                    winner: sub1.studentId < sub2.studentId ? sub1.studentId : sub2.studentId
-                });
-            }
-
-            // Calculate scores for this round
-            const scores = {};
-            const evaluationsSnapshot = await getDocs(
-                query(collection(db, 'evaluations'), 
-                    where('activityId', '==', activityRef.id))
-            );
-            
-            evaluationsSnapshot.docs.forEach(doc => {
-                const data = doc.data();
-                scores[data.winner] = (scores[data.winner] || 0) + 1;
-            });
-
-            // Store round results
-            results.rounds.push({
-                round,
-                evaluations: roundEvaluations,
-                scores: Object.entries(scores)
-                    .map(([subId, score]) => {
-                        const submission = Object.values(submissionsByEmail)
-                            .find(s => s.id === subId);
-                        return {
-                            studentId: submission.studentId,
-                            score
-                        };
-                    })
-                    .sort((a, b) => b.score - a.score)
-            });
-
-            // Debug output for this round
-            console.log('\nRound Stats:');
-            console.log('Number of evaluations:', roundEvaluations.length);
-            console.log('Unique evaluators:', new Set(roundEvaluations.map(e => e.evaluator)).size);
-            console.log('Unique pairs:', new Set(roundEvaluations.map(e => e.pair.sort().join('-'))).size);
-        }
-
-        return results;
-    } catch (error) {
-        console.error('Simulation error:', error);
-        throw error;
+export const runSimulation = async (activityId) => {
+  if (!activityId) return;
+  
+  try {
+    console.log('Starting simulation for activity:', activityId);
+    const activityRef = doc(db, 'activities', activityId);
+    const activityDoc = await getDoc(activityRef);
+    
+    if (!activityDoc.exists()) {
+      console.error('Activity not found');
+      return;
     }
+
+    // Create 30 test submissions
+    const batch = writeBatch(db);
+    const submissionRefs = [];
+    const studentData = [];
+
+    for (let i = 0; i < 30; i++) {
+      const testData = generateTestData(i);
+      studentData.push(testData);
+      
+      // Create student document
+      const studentRef = doc(collection(db, 'students'));
+      batch.set(studentRef, {
+        name: testData.studentName,
+        email: testData.studentEmail,
+        studentId: i + 1,
+        createdAt: new Date()
+      });
+
+      // Create submission document
+      const submissionRef = doc(collection(db, 'submissions'));
+      batch.set(submissionRef, {
+        activityId,
+        studentName: testData.studentName,
+        studentEmail: testData.studentEmail,
+        studentId: i + 1,
+        content: testData.content,
+        images: testData.images,
+        timestamp: new Date(),
+        status: 'submitted',
+        version: '1.0'
+      });
+
+      submissionRefs.push(submissionRef.id);
+    }
+
+    // Update activity with submission refs
+    batch.update(activityRef, {
+      submissions: submissionRefs
+    });
+
+    await batch.commit();
+    console.log('Data simulation completed successfully');
+
+    // Ask user before opening tabs
+    const openTabs = window.confirm(
+      'Simulation data has been created. Would you like to open browser tabs for all 30 students?'
+    );
+
+    if (openTabs) {
+      console.log('Opening student tabs...');
+      for (const data of studentData) {
+        await openStudentTab(data, activityId);
+      }
+      console.log('All student tabs opened');
+    }
+
+  } catch (error) {
+    console.error('Error running simulation:', error);
+    throw error;
+  }
 };
